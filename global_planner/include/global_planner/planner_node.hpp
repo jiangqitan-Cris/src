@@ -23,8 +23,19 @@ namespace global_planner {
 class GlobalPlannerNode : public rclcpp::Node {
 
 public:
-    using ComputePath = nav2_msgs::action::ComputePathToPose;
-    using GoalHandleComputePath = rclcpp_action::ServerGoalHandle<ComputePath>;
+    using ComputePath = nav2_msgs::action::ComputePathToPose; // 计算去某个位姿的路径，这是Nav2预定义的action接口
+    using GoalHandleComputePath = rclcpp_action::ServerGoalHandle<ComputePath>; // action服务端
+    /*
+    通过这个 GoalHandle，服务端可以做到：
+
+    publish_feedback()：给客户端发进度。
+
+    succeed()：告诉客户端任务成功了。
+
+    abort()：任务失败，中断。
+
+    is_canceling()：检查客户端是不是想取消这个任务。
+    */
 
     /**
      * @brief 构造函数
@@ -36,12 +47,12 @@ private:
     void mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg);
 
     // 2. Action Server核心处理
-    rclcpp_action::GoalResponse handle_goal(
-        const rclcpp_action::GoalUUID & uuid,
+    rclcpp_action::GoalResponse handle_goal( // 审查action请求
+        const rclcpp_action::GoalUUID & uuid, // action请求的ID，由ROS生成，自己不用管
         std::shared_ptr<const ComputePath::Goal> goal);
-    rclcpp_action::CancelResponse handle_cancel(
+    rclcpp_action::CancelResponse handle_cancel( // 请求取消
         const std::shared_ptr<GoalHandleComputePath> goal_handle);
-    void handle_accepted(const std::shared_ptr<GoalHandleComputePath> goal_handle);
+    void handle_accepted(const std::shared_ptr<GoalHandleComputePath> goal_handle); // 正式开工
 
     // 3. 业务执行逻辑
     void execute(const shared_ptr<GoalHandleComputePath> goal_handle);

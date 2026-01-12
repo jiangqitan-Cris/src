@@ -6,7 +6,7 @@ from launch_ros.substitutions import FindPackageShare
 from launch_ros.actions import Node
 
 def generate_launch_description():
-    # 1. 规划器节点
+    # 规划器节点
     config_file = os.path.join(
         get_package_share_directory('global_planner'),
         'params',
@@ -20,7 +20,15 @@ def generate_launch_description():
         parameters=[config_file]
     )
 
-    # 2. 地图发布节点 (Map Server)
+    # 将rviz2中先选中的目标点转化成路径规划需要的action通信消息
+    rviz_goal_bridge_node = Node(
+        package='global_planner',
+        executable='rviz_goal_to_action_node',
+        name='rviz_goal_bridge',
+        output='screen'
+    )
+
+    # 地图发布节点 (Map Server)
     # 注意：需要安装 nav2_map_server。如果没有，可以用下面这个简单的
     map_file = os.path.join(get_package_share_directory('global_planner'), 'maps', 'nav.yaml')
     map_server = Node(
@@ -38,7 +46,7 @@ def generate_launch_description():
         parameters=[{'node_names': ['map_server'], 'autostart': True}]
     )
 
-    # 3. 静态坐标变换 (模拟机器人位置: map -> base_link)
+    # 静态坐标变换 (模拟机器人位置: map -> base_link)
     # 假设机器人就在原点
     static_tf = Node(
         package='tf2_ros',
@@ -46,7 +54,7 @@ def generate_launch_description():
         arguments=['0', '0', '0', '0', '0', '0', 'map', 'base_link']
     )
 
-    # 4. Rviz2 可视化
+    # Rviz2 可视化
     rviz2 = Node(
         package='rviz2',
         executable='rviz2',
@@ -60,6 +68,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         planner_node,
+        rviz_goal_bridge_node,
         map_server,
         map_server_lifecycle,
         static_tf,

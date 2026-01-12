@@ -34,9 +34,15 @@ add_executable(global_planner_node
   src/planner_component.cpp
   src/planner_node.cpp
 )
+add_executable(rviz_goal_to_action_node 
+            utils/rviz_goal_to_action_node.cpp)
 
 # 5. 链接依赖库
 target_link_libraries(global_planner_node
+  rclcpp::rclcpp
+  rclcpp_action::rclcpp_action
+)
+target_link_libraries(rviz_goal_to_action_node 
   rclcpp::rclcpp
   rclcpp_action::rclcpp_action
 )
@@ -53,10 +59,17 @@ ament_target_dependencies(global_planner_node
   tf2_ros
   tf2_geometry_msgs
 )
+ament_target_dependencies(rviz_goal_to_action_node
+  rclcpp
+  rclcpp_action
+  geometry_msgs
+  nav2_msgs
+)
 
 # 6. 安装指令：这决定了 colcon build 之后，二进制文件和配置文件的去向
 install(TARGETS
   global_planner_node
+  rviz_goal_to_action_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
