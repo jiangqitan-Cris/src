@@ -1,0 +1,7 @@
+global_planner_node:  
+  ros__parameters:
+    planner_type: "ASTAR"
+    use_inflation: true
+    inflation_radius: 0.30
+    global_frame: "map"
+    robot_frame: "base_link"

@@ -1,0 +1,239 @@
+<?xml version="1.0"?>
+<robot name="tri_wheel_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ========================= 定义常量（方便修改） ========================= -->
+  <xacro:property name="base_length" value="2.1" /> <!-- 车体长 -->
+  <xacro:property name="base_width"  value="1.076" /> <!-- 车体宽 -->
+  <xacro:property name="base_height" value="1.1" /> <!-- 车体高 -->
+  <xacro:property name="base_mass" value="37" /> <!-- 车体质量 -->
+  <xacro:property name="wheel_radius" value="0.21" /> <!-- 轮子半径 -->
+  <xacro:property name="wheel_width"  value="0.15" /> <!-- 轮子厚度 -->
+  <xacro:property name="steering_wheel_radius" value="0.195" /> <!-- 轮子半径 -->
+  <xacro:property name="steering_wheel_width"  value="0.35" /> <!-- 轮子厚度 -->
+  <xacro:property name="wheel_y_offset" value="0.463" /> <!-- 驱动轮到中心距离 -->
+  <xacro:property name="drive_wheel_mass" value="20" /> <!-- 驱动轮质量 -->
+  <xacro:property name="steering_wheel_mass" value="20" /> <!-- 转向轮质量 -->
+  <xacro:property name="steering_link_mass" value="10" /> <!-- 转向连杆质量 -->
+  <!-- ========================= 添加虚拟根链接 ========================= -->
+  <link name="base_footprint">
+    <!-- 这个链接没有惯性，没有碰撞和视觉，只是一个参考点 -->
+  </link>
+
+  <!-- ========================= 定义车体连杆 (base_link) ========================= -->
+  <link name="base_link">
+    <visual>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+      <material name="blue">
+        <color rgba="0.2 0.4 0.8 1.0"/> <!-- 蓝色 -->
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${base_length} ${base_width} ${base_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${base_mass}"/> <!-- 车体质量，单位：千克 -->
+      <inertia ixx="${base_mass*(base_width*base_width + base_height*base_height)/12}" ixy="0.0" ixz="0.0" iyy="${base_mass*(base_length*base_length + (base_height)*(base_height))/12}" iyz="0.0" izz="${base_mass*(base_length*base_length + base_width*base_width)/12}"/>
+    </inertial>
+  </link>
+
+  <!-- 添加固定关节连接虚拟根链接和base_link -->
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
+  </joint>
+  
+  <!-- ========================= 定义左驱动轮 ========================= -->
+  <link name="left_wheel_link">
+    <visual>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+      <material name="green">
+       <color rgba="0.0 1.0 0.0 1.0"/> <!-- 绿色 -->
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${drive_wheel_mass}"/>
+      <inertia ixx="${drive_wheel_mass*(3*wheel_radius*wheel_radius + wheel_width*wheel_width)/12}" ixy="0.0" ixz="0.0" iyy="${drive_wheel_mass*(3*wheel_radius*wheel_radius + wheel_width*wheel_width)/12}" iyz="0.0" izz="${drive_wheel_mass*wheel_radius*wheel_radius/2}"/>
+    </inertial>
+  </link>
+
+  <!-- 左轮关节：连接车体与左轮，类型为 continuous（连续旋转）-->
+  <joint name="left_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="left_wheel_link"/>
+    <origin xyz="0.616 ${wheel_y_offset} -${base_height/2}" rpy="1.5708 0 0"/>
+    <axis xyz="0 0 1"/> <!-- 绕Y轴旋转 -->
+  </joint>
+
+  <!-- ========================= 定义右驱动轮（与左轮对称） ========================= -->
+  <link name="right_wheel_link">
+    <visual>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+      <material name="green">
+       <color rgba="0.0 1.0 0.0 1.0"/> <!-- 绿色 -->
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="${drive_wheel_mass}"/>
+      <inertia ixx="${drive_wheel_mass*(3*wheel_radius*wheel_radius + wheel_width*wheel_width)/12}" ixy="0.0" ixz="0.0" iyy="${drive_wheel_mass*(3*wheel_radius*wheel_radius + wheel_width*wheel_width)/12}" iyz="0.0" izz="${drive_wheel_mass*wheel_radius*wheel_radius/2}"/>
+    </inertial>
+  </link>
+
+  <joint name="right_wheel_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="right_wheel_link"/>
+    <origin xyz="0.616 -${wheel_y_offset} -${base_height/2}" rpy="1.5708 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <!-- ========================= 定义前转向轮（可转向） ========================= -->
+  <!-- 1. 转向臂连杆 (只是一个用于转向的连接杆) -->
+  <link name="caster_steering_link">
+    <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+            <cylinder radius="0.05" length="0.3"/> <!-- 一个小圆柱，表示转向臂 -->
+        </geometry>
+        <material name="gray">
+            <color rgba="0.5 0.5 0.5 1.0"/>
+        </material>
+    </visual>
+    <inertial>
+        <mass value="${steering_link_mass}"/>
+      <inertia ixx="${steering_link_mass*(3*0.05*0.05 + 0.3*0.3)/12}" ixy="0.0" ixz="0.0" iyy="${steering_link_mass*(3*0.05*0.05 + 0.3*0.3)/12}" iyz="0.0" izz="${steering_link_mass*0.05*0.05/2}"/>
+    </inertial>
+  </link>
+
+  <!-- 2. 转向轮（真正的轮子）连杆 -->
+  <link name="caster_wheel_link">
+    <visual>
+        <geometry>
+            <!-- 轮子：一个直立的圆柱，注意轴线是Z轴 -->
+            <cylinder radius="${steering_wheel_radius}" length="${steering_wheel_width}"/>
+        </geometry>
+        <material name="gray">
+            <color rgba="0.7 0.7 0.7 1.0"/>
+        </material>
+    </visual>
+    <collision>
+        <geometry>
+            <cylinder radius="${steering_wheel_radius}" length="${steering_wheel_width}"/>
+        </geometry>
+    </collision>
+    <inertial>
+        <mass value="${steering_wheel_mass}"/>
+      <inertia ixx="${steering_wheel_mass*(3*steering_wheel_radius*steering_wheel_radius + steering_wheel_width*steering_wheel_width)/12}" ixy="0.0" ixz="0.0" iyy="${steering_wheel_mass*steering_wheel_radius*steering_wheel_radius/2}" iyz="0.0" izz="${steering_wheel_mass*(3*steering_wheel_radius*steering_wheel_radius + steering_wheel_width*steering_wheel_width)/12}"/>
+  </inertial>
+  </link>
+
+  <!-- 3. 转向关节：连接车体与转向臂，控制左右转向 (revolute，绕Z轴) -->
+  <joint name="caster_steering_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="caster_steering_link"/>
+    <!-- 安装位置：车前部中间，略低于车体 -->
+    <origin xyz="-0.855 0 -${base_height/2}" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/> <!-- 绕Z轴旋转（水平转向） -->
+    <!-- 限制转向角度，例如左右各75度（约1.31弧度） -->
+    <limit lower="-1.57" upper="1.57" effort="500.0" velocity="1.0"/>
+    <dynamics damping="1.0" friction="0.1"/>
+  </joint>
+
+  <!-- 4. 滚动关节：连接转向臂与轮子，控制轮子滚动 (continuous，绕轮子Y轴) -->
+  <joint name="caster_wheel_joint" type="continuous">
+    <parent link="caster_steering_link"/>
+    <child link="caster_wheel_link"/>
+    <!-- 将轮子安装在转向臂末端，并将其扶正（绕X轴转90度） -->
+    <origin xyz="0 0 -0.015" rpy="1.5708 0 0"/>
+    <axis xyz="0 0 1"/> <!-- 轮子绕自己的Z轴旋转（滚动） -->
+  </joint>
+
+  <!-- ========================= Gazebo 物理属性 ========================= -->
+  <gazebo reference="base_link">
+    <material>Gazebo/Blue</material>
+  </gazebo>
+  
+  <gazebo reference="left_wheel_link">
+    <material>Gazebo/Green</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>10.0</kd>
+  </gazebo>
+  
+  <gazebo reference="right_wheel_link">
+    <material>Gazebo/Green</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>10.0</kd>
+  </gazebo>
+  
+  <gazebo reference="caster_steering_link">
+    <material>Gazebo/Grey</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+  </gazebo>
+  
+  <gazebo reference="caster_wheel_link">
+    <material>Gazebo/DarkGrey</material>
+    <mu1>1.0</mu1>
+    <mu2>1.0</mu2>
+    <kp>1000000.0</kp>
+    <kd>10.0</kd>
+  </gazebo>
+
+  <!-- ========================= Gazebo 差速驱动插件 ========================= -->
+  <!-- 1. 差速驱动插件 -->
+  <gazebo>
+    <plugin name="gz::sim::systems::DiffDrive" filename="gz-sim-diff-drive-system">
+      <left_joint>left_wheel_joint</left_joint>
+      <right_joint>right_wheel_joint</right_joint>
+      <wheel_separation>${wheel_y_offset*2}</wheel_separation>
+      <wheel_radius>${wheel_radius}</wheel_radius>
+      <odom_publish_frequency>50.0</odom_publish_frequency>
+      <topic>cmd_vel</topic>
+    </plugin>
+  </gazebo>
+
+  <!-- 2. 转向关节控制器 -->
+  <gazebo>
+    <plugin name="gz::sim::systems::JointPositionController" filename="gz-sim-joint-position-controller-system">
+      <joint_name>caster_steering_joint</joint_name>
+      <topic>caster_steering/set_position</topic>
+      <initial_position>0.0</initial_position>
+      <pid>
+        <p>100.0</p>
+        <i>0.1</i>
+        <d>1.0</d>
+      </pid>
+    </plugin>
+  </gazebo>
+
+  <!-- 3. 关节状态发布器 -->
+  <gazebo>
+    <plugin name="gz::sim::systems::JointStatePublisher" filename="gz-sim-joint-state-publisher-system">
+      <joint_name>left_wheel_joint</joint_name>
+      <joint_name>right_wheel_joint</joint_name>
+      <joint_name>caster_steering_joint</joint_name>
+      <joint_name>caster_wheel_joint</joint_name>
+      <update_rate>50.0</update_rate>
+    </plugin>
+  </gazebo>
+</robot>
