@@ -17,6 +17,7 @@
 #include "algorithms/base_algorithm.hpp"
 #include "planner_component.hpp"
 #include "algorithms/astar.hpp"
+#include "smoother/smoother.hpp"
 
 namespace global_planner {
 
@@ -59,6 +60,7 @@ private:
 
     // 辅助函数：通过TF获取当前位姿
     bool getCurrentPose(Pose2D& pose);
+    bool checkCollision(double x, double y);
 
     // Parameters
     unique_ptr<BaseAlgorithm> planner_;
@@ -66,11 +68,12 @@ private:
 
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+    rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr smooth_path_pub_;
     rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr inflated_map_pub_;
     rclcpp_action::Server<ComputePath>::SharedPtr action_server_;
 
     mutex map_mutex_;
-    nav_msgs::msg::OccupancyGrid::SharedPtr current_map_;
+    nav_msgs::msg::OccupancyGrid current_inflated_map_;
 
     shared_ptr<tf2_ros::Buffer> tf_buffer_;
     shared_ptr<tf2_ros::TransformListener> tf_listener_;

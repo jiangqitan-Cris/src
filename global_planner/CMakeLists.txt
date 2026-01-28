@@ -25,6 +25,8 @@ find_package(tf2_geometry_msgs REQUIRED)
 include_directories(
   include
   include/${PROJECT_NAME}
+  ${CMAKE_CURRENT_SOURCE_DIR} 
+  ${catkin_INCLUDE_DIRS}
 )
 
 # 4. 编译可执行文件
@@ -32,6 +34,7 @@ include_directories(
 add_executable(global_planner_node
   src/algorithms/astar.cpp
   src/planner_component.cpp
+  src/smoother/smoother.cpp
   src/planner_node.cpp
 )
 add_executable(rviz_goal_to_action_node 

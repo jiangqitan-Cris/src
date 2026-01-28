@@ -39,6 +39,7 @@ GlobalPlannerNode::GlobalPlannerNode(const rclcpp::NodeOptions & options)
     map_sub_ = this->create_subscription<nav_msgs::msg::OccupancyGrid>(
                 "/map", map_qos, std::bind(&GlobalPlannerNode::mapCallback, this, std::placeholders::_1));
     path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/global_path", 10);
+    smooth_path_pub_ = this->create_publisher<nav_msgs::msg::Path>("/global_smooth_path", 10);
     inflated_map_pub_ = this->create_publisher<nav_msgs::msg::OccupancyGrid>(
                             "inflated_map", 
                             rclcpp::QoS(rclcpp::KeepLast(1)).transient_local());
@@ -56,7 +57,6 @@ GlobalPlannerNode::GlobalPlannerNode(const rclcpp::NodeOptions & options)
 
 void GlobalPlannerNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
     lock_guard<mutex> lock(map_mutex_);
-    current_map_ = msg;
 
     GridMapData neutral_map;
     neutral_map.data = msg->data;
@@ -71,10 +71,10 @@ void GlobalPlannerNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPt
     }
 
     // get and publish inflated map
-    auto inflated_grid = *msg;
-    inflated_grid.data = planner_->getProcessedMap();
-    inflated_grid.header.stamp = this->now();
-    inflated_map_pub_->publish(inflated_grid);
+    current_inflated_map_ = *msg;
+    current_inflated_map_.data = planner_->getProcessedMap();
+    current_inflated_map_.header.stamp = this->now();
+    inflated_map_pub_->publish(current_inflated_map_);
 
     RCLCPP_DEBUG(this->get_logger(), "Map updated.");
 }
@@ -90,6 +90,30 @@ bool GlobalPlannerNode::getCurrentPose(Pose2D& pose) {
         RCLCPP_WARN(this->get_logger(), "Could not get robot pose: %s", ex.what());
         return false;
     }
+}
+
+bool GlobalPlannerNode::checkCollision(double x, double y) {
+    if (current_inflated_map_.data.empty()) {
+        RCLCPP_WARN(get_logger(), "Cannot get map data!");
+        return true;
+    }
+
+    double origin_x = current_inflated_map_.info.origin.position.x;
+    double origin_y = current_inflated_map_.info.origin.position.y;
+    double resolution = current_inflated_map_.info.resolution;
+    int width = current_inflated_map_.info.width;
+    int height = current_inflated_map_.info.height;
+
+    int grid_x = static_cast<int>((x - origin_x) / resolution);
+    int grid_y = static_cast<int>((y - origin_y) / resolution);
+
+    if (grid_x < 0 || grid_x >= width || grid_y < 0 || grid_y >= height) {
+        return true;
+    }
+
+    int index = grid_y * width + grid_x;
+
+    return current_inflated_map_.data[index] > 50 || current_inflated_map_.data[index] == -1;
 }
 
 rclcpp_action::GoalResponse GlobalPlannerNode::handle_goal(
@@ -112,6 +136,7 @@ void GlobalPlannerNode::execute(const std::shared_ptr<GoalHandleComputePath> goa
     const auto goal = goal_handle->get_goal();
     auto result = std::make_shared<ComputePath::Result>();
     nav_msgs::msg::Path global_path;
+    nav_msgs::msg::Path smooth_path_pub;
     
     // 1. 获取起点 (从 TF 获取) 和 终点 (从 Goal 获取)
     Pose2D start_pose, goal_pose;
@@ -131,19 +156,31 @@ void GlobalPlannerNode::execute(const std::shared_ptr<GoalHandleComputePath> goa
 
     {
         std::lock_guard<std::mutex> lock(map_mutex_);
-        if (!current_map_) {
+        if (current_inflated_map_.data.empty()) {
             RCLCPP_WARN(this->get_logger(), "Waiting for map...");
         } else {
             success = planner_->makePlan(start_pose, goal_pose, path_points);
         }
     }
 
+    // 路径简化和优化
+    auto is_occupied = [this](double x, double y) {
+        return this->checkCollision(x, y); 
+    };
+    IntegratedSmoother smoother;
+    auto pruned = smoother.prunePath(path_points, is_occupied);
+    RCLCPP_INFO(get_logger(), "The pruned path size: %zu", pruned.size());
+    auto dense_path = smoother.fixDensity(pruned);
+    RCLCPP_INFO(get_logger(), "The re-size dense path size: %zu", dense_path.size());
+    auto post_path = smoother.postProcess(dense_path, is_occupied);
+    auto final_path = smoother.smooth(post_path, is_occupied);
+
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
     // 3. 结果处理
     if (success) {
-        for (const auto& p : path_points) {
+        for (const auto& p : final_path) {
             geometry_msgs::msg::PoseStamped ps;
             ps.header.frame_id = global_frame_;
             ps.header.stamp = this->now();
@@ -156,10 +193,22 @@ void GlobalPlannerNode::execute(const std::shared_ptr<GoalHandleComputePath> goa
         result->path.header.stamp = this->now();
         global_path.header.frame_id = global_frame_;
         global_path.header.stamp = this->now();
-        
-        goal_handle->succeed(result);
         path_pub_->publish(global_path);
-        RCLCPP_INFO(this->get_logger(), "Plan found in %ld ms with %zu points", duration, path_points.size());
+
+        for (const auto& p : post_path) {
+            geometry_msgs::msg::PoseStamped ps;
+            ps.header.frame_id = global_frame_;
+            ps.header.stamp = this->now();
+            ps.pose.position.x = p.x;
+            ps.pose.position.y = p.y;
+            smooth_path_pub.poses.push_back(ps);
+        }
+        smooth_path_pub.header.frame_id = global_frame_;
+        smooth_path_pub.header.stamp = this->now();
+        smooth_path_pub_->publish(smooth_path_pub);
+
+        goal_handle->succeed(result);
+        RCLCPP_INFO(this->get_logger(), "Plan found in %ld ms with %zu points", duration, final_path.size());
     } else {
         goal_handle->abort(result);
         RCLCPP_ERROR(this->get_logger(), "Planner failed to find a path!");
