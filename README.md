@@ -176,7 +176,7 @@ ros2 lifecycle set /global_planner_node activate
 
 ## 作者
 
-- **Jiangqi Tan** - [tanjiangqi@xyz-eai.com](mailto:tanjiangqi@xyz-eai.com)
+- **Jiangqi Tan**
 
 ## 致谢
 
