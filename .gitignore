@@ -1,0 +1,61 @@
+# Build directories
+build/
+install/
+log/
+devel/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# Compiled files
+*.o
+*.a
+*.so
+*.pyc
+__pycache__/
+*.pyo
+
+# ROS2 specific
+*.bag
+*.db3
+*.db3-shm
+*.db3-wal
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# Colcon
+colcon.meta
+COLCON_IGNORE
+
+# Test results
+test_results/
+*.gcov
+*.gcda
+*.gcno
+
+# Documentation
+docs/_build/
+*.pdf
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Python virtual environment
+venv/
+.env/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
