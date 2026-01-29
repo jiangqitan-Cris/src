@@ -1,9 +1,10 @@
 #include "algorithms/astar.hpp"
 #include <algorithm>
+#include <queue>
 
 namespace global_planner {
 
-void AStar::initialize(const string& name) {
+void AStar::initialize(const std::string& name) {
     name_ = name;
 }
 
@@ -12,35 +13,38 @@ void AStar::configure(const PlannerConfig& config) {
 }
 
 void AStar::updateMap(const GridMapData& map_data) {
-    width_ = map_data.width;
-    height_ = map_data.height;
+    width_ = static_cast<int>(map_data.width);
+    height_ = static_cast<int>(map_data.height);
     resolution_ = map_data.resolution;
     origin_x_ = map_data.origin_x;
     origin_y_ = map_data.origin_y;
 
-    vector<int8_t> processed_data = map_data.data;
+    std::vector<int8_t> processed_data = map_data.data;
     if (config_.use_inflation) {
         inflateMap(processed_data);
     }
 
     map_data_ = std::move(processed_data);
+    
+    // 预分配搜索相关的内存
+    const size_t map_size = static_cast<size_t>(width_ * height_);
+    visited_.resize(map_size, false);
+    node_index_.resize(map_size, -1);
+    node_pool_.reserve(map_size / 4);  // 预估最多访问 1/4 的节点
 }
 
 void AStar::inflateMap(std::vector<int8_t>& data) {
-    // 1. 计算膨胀半径对应的像素格数
-    int inflation_cells = static_cast<int>(config_.inflation_radius / resolution_);
+    const int inflation_cells = static_cast<int>(config_.inflation_radius / resolution_);
     if (inflation_cells <= 0) {
         return;
     }
 
-    // 2. 准备：dist_map 记录到最近障碍物的距离（初始化为极大值）
-    // 使用 int16_t 节省内存
     std::vector<int> dist_map(width_ * height_, 255); 
     std::queue<std::pair<int, int>> q;
 
-    // 3. 将所有原始障碍物入队
+    // 将所有原始障碍物入队
     for (int i = 0; i < width_ * height_; ++i) {
-        if (data[i] > 50) { // 原始障碍物
+        if (data[i] > 50) {
             dist_map[i] = 0;
             int x = i % width_;
             int y = i / width_;
@@ -48,28 +52,23 @@ void AStar::inflateMap(std::vector<int8_t>& data) {
         }
     }
 
-    // 4. BFS 扩散
-    int dx[] = {1, -1, 0, 0, 1, 1, -1, -1}; // 8 邻域
-    int dy[] = {0, 0, 1, -1, 1, -1, 1, -1};
-
+    // BFS 扩散
     while (!q.empty()) {
         auto [x, y] = q.front();
         q.pop();
 
         int current_dist = dist_map[y * width_ + x];
-        if (current_dist >= inflation_cells) continue; // 超过半径，停止扩散
+        if (current_dist >= inflation_cells) continue;
 
-        for (int i = 0; i < 8; ++i) {
-            int nx = x + dx[i];
-            int ny = y + dy[i];
+        for (int i = 0; i < NUM_DIRECTIONS; ++i) {
+            int nx = x + dx_[i];
+            int ny = y + dy_[i];
 
-            // 边界检查
-            if (nx >= 0 && nx < (int)width_ && ny >= 0 && ny < (int)height_) {
+            if (nx >= 0 && nx < width_ && ny >= 0 && ny < height_) {
                 int idx = ny * width_ + nx;
-                // 如果邻居还没被访问过（或者找到更近的距离）
                 if (dist_map[idx] > current_dist + 1) {
                     dist_map[idx] = current_dist + 1;
-                    data[idx] = 100; // 标记为膨胀障碍物
+                    data[idx] = 100;
                     q.push({nx, ny});
                 }
             }
@@ -77,104 +76,137 @@ void AStar::inflateMap(std::vector<int8_t>& data) {
     }
 }
 
-double AStar::getHeuristic(int x1, int y1, int x2, int y2) {
-    // Use Euclidean distance
-    return hypot(x1 - x2, y1 - y2);
+double AStar::getHeuristic(int x1, int y1, int x2, int y2) const {
+    return std::hypot(x1 - x2, y1 - y2);
+}
+
+void AStar::resetSearch() {
+    // 只重置使用过的节点（比全量重置快）
+    for (const auto& node : node_pool_) {
+        int idx = toIndex(node.x, node.y);
+        visited_[idx] = false;
+        node_index_[idx] = -1;
+    }
+    node_pool_.clear();
 }
 
 bool AStar::makePlan(const Pose2D& start, const Pose2D& goal, 
-                        std::vector<Pose2D>& path) {
-    
+                     std::vector<Pose2D>& path) {
     path.clear();
-
-    // 1. world to index
-    int start_x = round((start.x - origin_x_) / resolution_);
-    int start_y = round((start.y - origin_y_) / resolution_);
-    int goal_x = round((goal.x - origin_x_) / resolution_);
-    int goal_y = round((goal.y - origin_y_) / resolution_);
-
-    // boundary check
-    if (!isInside(start_x, start_y) || !isInside(goal_x, goal_y)) {
+    
+    if (map_data_.empty()) {
         return false;
     }
 
-    // 2. initialize containers
-    priority_queue<AStarNode*, vector<AStarNode*>, NodeComparator> open_list;
-    unordered_map<int, AStarNode*> all_nodes;
+    // 世界坐标转栅格坐标
+    const int start_x = static_cast<int>(std::round((start.x - origin_x_) / resolution_));
+    const int start_y = static_cast<int>(std::round((start.y - origin_y_) / resolution_));
+    const int goal_x = static_cast<int>(std::round((goal.x - origin_x_) / resolution_));
+    const int goal_y = static_cast<int>(std::round((goal.y - origin_y_) / resolution_));
 
-    // Insert start point
-    AStarNode* start_node = new AStarNode(start_x, start_y);
-    start_node->h = getHeuristic(start_x, start_y, goal_x, goal_y);
-    open_list.push(start_node);
-    all_nodes[toIndex(start_x, start_y)] = start_node;
+    // 边界检查
+    if (!isInside(start_x, start_y) || !isInside(goal_x, goal_y)) {
+        return false;
+    }
+    
+    // 检查起点和终点是否在障碍物上
+    if (map_data_[toIndex(start_x, start_y)] > 50 || 
+        map_data_[toIndex(goal_x, goal_y)] > 50) {
+        return false;
+    }
 
-    AStarNode* current_node = nullptr;
-    bool found_goal = false;
+    // 重置搜索状态
+    resetSearch();
 
-    // 3. start searching
+    // 优先队列比较器
+    auto cmp = [this](int a, int b) {
+        return node_pool_[a].f() > node_pool_[b].f();
+    };
+    std::priority_queue<int, std::vector<int>, decltype(cmp)> open_list(cmp);
+
+    // 插入起点
+    node_pool_.emplace_back(start_x, start_y);
+    node_pool_.back().h = getHeuristic(start_x, start_y, goal_x, goal_y);
+    int start_pool_idx = static_cast<int>(node_pool_.size()) - 1;
+    node_index_[toIndex(start_x, start_y)] = start_pool_idx;
+    open_list.push(start_pool_idx);
+
+    int goal_pool_idx = -1;
+
+    // A* 搜索
     while (!open_list.empty()) {
-        current_node = open_list.top();
+        int current_pool_idx = open_list.top();
         open_list.pop();
+        
+        const AStarNode& current = node_pool_[current_pool_idx];
+        int current_grid_idx = toIndex(current.x, current.y);
+        
+        // 已访问过则跳过
+        if (visited_[current_grid_idx]) {
+            continue;
+        }
+        visited_[current_grid_idx] = true;
 
-        // reach to goal
-        if (current_node->x == goal_x && current_node->y == goal_y) {
-            found_goal = true;
+        // 到达目标
+        if (current.x == goal_x && current.y == goal_y) {
+            goal_pool_idx = current_pool_idx;
             break;
         }
 
-        //search neighbors
-        for (const auto& m : motions_) {
-            int next_x = current_node->x + m.first;
-            int next_y = current_node->y + m.second;
-            int next_idx = toIndex(next_x, next_y);
-
-            // collision and boundary check
-            if (!isInside(next_x, next_y) || map_data_[next_idx] > 50 
-                    || map_data_[next_idx] < 0) {
+        // 扩展邻居
+        for (int i = 0; i < NUM_DIRECTIONS; ++i) {
+            int nx = current.x + dx_[i];
+            int ny = current.y + dy_[i];
+            
+            if (!isInside(nx, ny)) continue;
+            
+            int next_grid_idx = toIndex(nx, ny);
+            
+            // 障碍物或已访问
+            if (map_data_[next_grid_idx] > 50 || map_data_[next_grid_idx] < 0 ||
+                visited_[next_grid_idx]) {
                 continue;
             }
-            double move_cost = hypot(m.first, m.second);
-            double new_g = current_node->g + move_cost;
-
-            // if the node is not explored or find shorter path
-            if (all_nodes.find(next_idx) == all_nodes.end() || 
-                                new_g < all_nodes[next_idx]->g) {
-                AStarNode* next_node;
-                if (all_nodes.find(next_idx) == all_nodes.end()) {
-                    next_node = new AStarNode(next_x, next_y);
-                    all_nodes[next_idx] = next_node;
-                } else {
-                    next_node = all_nodes[next_idx];
-                }
-
-                next_node->g = new_g;
-                next_node->h = next_node->h = getHeuristic(next_x, next_y, goal_x, goal_y);
-                next_node->parent = current_node;
-                open_list.push(next_node);
+            
+            double new_g = current.g + move_cost_[i];
+            
+            int existing_pool_idx = node_index_[next_grid_idx];
+            if (existing_pool_idx == -1) {
+                // 新节点
+                node_pool_.emplace_back(nx, ny);
+                int new_pool_idx = static_cast<int>(node_pool_.size()) - 1;
+                node_pool_[new_pool_idx].g = new_g;
+                node_pool_[new_pool_idx].h = getHeuristic(nx, ny, goal_x, goal_y);
+                node_pool_[new_pool_idx].parent_index = current_pool_idx;
+                node_index_[next_grid_idx] = new_pool_idx;
+                open_list.push(new_pool_idx);
+            } else if (new_g < node_pool_[existing_pool_idx].g) {
+                // 找到更短路径
+                node_pool_[existing_pool_idx].g = new_g;
+                node_pool_[existing_pool_idx].parent_index = current_pool_idx;
+                open_list.push(existing_pool_idx);  // 重新加入队列
             }
         }
     }
 
-    // 4. backtracking path
-    if (found_goal) {
-        AStarNode* temp = current_node;
-        while (temp != nullptr) {
+    // 回溯路径
+    if (goal_pool_idx != -1) {
+        int idx = goal_pool_idx;
+        while (idx != -1) {
+            const AStarNode& node = node_pool_[idx];
             Pose2D p;
-            p.x = temp->x * resolution_ + origin_x_;
-            p.y = temp->y * resolution_ + origin_y_;
-            p.theta = 0.0; // no need yaw information;
+            p.x = node.x * resolution_ + origin_x_;
+            p.y = node.y * resolution_ + origin_y_;
+            p.theta = 0.0;
+            p.kappa = 0.0;
             path.push_back(p);
-            temp = temp->parent;
+            idx = node.parent_index;
         }
-        reverse(path.begin(), path.end());
+        std::reverse(path.begin(), path.end());
+        return true;
     }
 
-    // 5. clear the memory
-    for (auto& entry : all_nodes) {
-        delete entry.second;
-    }
-
-    return found_goal;
+    return false;
 }
 
 } // namespace global_planner

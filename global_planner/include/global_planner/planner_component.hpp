@@ -8,6 +8,9 @@
 
 namespace global_planner {
 
+/**
+ * @brief 规划器类型枚举
+ */
 enum class PlannerType {
     ASTAR,
     RRTCONNECT,
@@ -17,6 +20,8 @@ enum class PlannerType {
 
 /**
  * @brief PlannerComponent 类：负责算法的实例化、切换及管理
+ * 
+ * 使用工厂模式创建不同的规划算法实例
  */
 class PlannerComponent {
 
@@ -29,11 +34,12 @@ public:
      * @param type 算法类型枚举
      * @return 成功返回唯一指针，失败返回 nullptr
      */
-    unique_ptr<BaseAlgorithm> create(PlannerType type);
+    std::unique_ptr<BaseAlgorithm> create(PlannerType type);
 
     /**
      * @brief 辅助方法：将字符串转换为枚举
-     * @param type_str 字符串 (如 "astar")
+     * @param type_str 字符串 (如 "ASTAR")
+     * @return 对应的枚举值
      */
     PlannerType stringToType(const std::string& type_str);
 
@@ -46,7 +52,6 @@ private:
     // 禁止拷贝，保证组件安全性
     PlannerComponent(const PlannerComponent&) = delete;
     PlannerComponent& operator=(const PlannerComponent&) = delete;
-
 };
 
 } // namespace global_planner

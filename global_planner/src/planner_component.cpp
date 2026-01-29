@@ -5,29 +5,28 @@
 
 namespace global_planner {
 
-unique_ptr<BaseAlgorithm> PlannerComponent::create(PlannerType type) {
+std::unique_ptr<BaseAlgorithm> PlannerComponent::create(PlannerType type) {
     switch (type) {
         case PlannerType::ASTAR:
-            cout << "[PlannerComponent] Creating AStar Algorithm..." << endl;
-            return make_unique<AStar>();
+            std::cout << "[PlannerComponent] Creating AStar Algorithm..." << std::endl;
+            return std::make_unique<AStar>();
 
         case PlannerType::RRTCONNECT:
-            cout << "[PlannerComponent] Creating RRTConnect Algorithm..." << endl;
-            return nullptr; // 暂时还没实现，先返回nullptr
+            std::cout << "[PlannerComponent] Creating RRTConnect Algorithm..." << std::endl;
+            return nullptr; // 暂时还没实现
 
         case PlannerType::DIJKSTRA:
-            cout << "[PlannerComponent] Creating Dijkstra Algorithm..." << endl;
-            return nullptr; // 暂时还没实现，先返回nullptr
+            std::cout << "[PlannerComponent] Creating Dijkstra Algorithm..." << std::endl;
+            return nullptr; // 暂时还没实现
         
         default:
-            cerr << "[PlannerComponent] Error: Unknown Planner Type!" << endl;
+            std::cerr << "[PlannerComponent] Error: Unknown Planner Type!" << std::endl;
             return nullptr;
     } 
 }
 
 PlannerType PlannerComponent::stringToType(const std::string& type_str) {
     std::string s = type_str;
-    // 统一转大写，增强容错性
     std::transform(s.begin(), s.end(), s.begin(), ::toupper);
 
     if (s == "ASTAR" || s == "A_STAR") return PlannerType::ASTAR;
@@ -35,6 +34,13 @@ PlannerType PlannerComponent::stringToType(const std::string& type_str) {
     if (s == "DIJKSTRA") return PlannerType::DIJKSTRA;
 
     return PlannerType::UNKNOWN;
+}
+
+void PlannerComponent::printSupportList() const {
+    std::cout << "Supported planners:" << std::endl;
+    std::cout << "  - ASTAR" << std::endl;
+    std::cout << "  - RRTCONNECT (not implemented)" << std::endl;
+    std::cout << "  - DIJKSTRA (not implemented)" << std::endl;
 }
 
 } // namespace global_planner
