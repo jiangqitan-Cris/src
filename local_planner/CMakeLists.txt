@@ -18,6 +18,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 
 # 包含目录
@@ -40,17 +41,42 @@ ament_target_dependencies(${PROJECT_NAME}_lib
   visualization_msgs
   tf2
   tf2_ros
+  tf2_geometry_msgs
 )
 
 target_link_libraries(${PROJECT_NAME}_lib
   Eigen3::Eigen
 )
 
-# 安装
+# 编译节点
+add_executable(local_planner_node
+  src/local_planner_node.cpp
+)
+
+ament_target_dependencies(local_planner_node
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  visualization_msgs
+  tf2
+  tf2_ros
+  tf2_geometry_msgs
+)
+
+target_link_libraries(local_planner_node
+  ${PROJECT_NAME}_lib
+)
+
+# 安装库
 install(TARGETS ${PROJECT_NAME}_lib
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
+  RUNTIME DESTINATION lib
+)
+
+# 安装可执行文件 (ROS2 需要安装到 lib/${PROJECT_NAME})
+install(TARGETS local_planner_node
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 install(DIRECTORY include/
@@ -69,6 +95,6 @@ endif()
 
 ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME}_lib)
-ament_export_dependencies(rclcpp nav_msgs geometry_msgs Eigen3)
+ament_export_dependencies(rclcpp nav_msgs geometry_msgs tf2_geometry_msgs Eigen3)
 
 ament_package()

@@ -1,70 +1,43 @@
-# Local Planner 配置文件
+# Local Planner 配置文件 (ROS2 参数格式)
 
-# ============================================================================
-#                            车辆参数
-# ============================================================================
-vehicle:
-  wheelbase: 0.5              # 轴距 (m)
-  front_overhang: 0.1         # 前悬 (m)
-  rear_overhang: 0.1          # 后悬 (m)
-  width: 0.4                  # 车宽 (m)
-  length: 0.7                 # 车长 (m)
-  max_steering_angle: 0.5     # 最大前轮转角 (rad) ≈ 28.6°
-  max_steering_rate: 0.5      # 最大转向角速度 (rad/s)
-  max_speed: 2.0              # 最大速度 (m/s)
-  min_speed: -0.5             # 最小速度 (m/s)
-  max_acceleration: 2.0       # 最大加速度 (m/s²)
-  max_deceleration: 3.0       # 最大减速度 (m/s²)
-  max_curvature: 1.0          # 最大曲率 (1/m)
-
-# ============================================================================
-#                         Lattice Planner 配置
-# ============================================================================
-lattice:
-  # 采样参数
-  num_width_samples: 7        # 横向采样数量
-  num_time_samples: 5         # 时间采样数量
-  max_lateral_offset: 2.0     # 最大横向偏移 (m)
-  min_planning_time: 2.0      # 最小规划时间 (s)
-  max_planning_time: 6.0      # 最大规划时间 (s)
-  time_resolution: 0.1        # 时间分辨率 (s)
-  
-  # 代价权重
-  weight_lateral_offset: 1.0      # 横向偏移代价
-  weight_lateral_velocity: 1.0    # 横向速度代价
-  weight_longitudinal_jerk: 1.0   # 纵向 jerk 代价
-  weight_lateral_jerk: 1.0        # 横向 jerk 代价
-  weight_time: 1.0                # 时间代价
-  weight_obstacle: 10.0           # 障碍物代价
-  
-  # 安全参数
-  safe_distance: 0.5          # 安全距离 (m)
-
-# ============================================================================
-#                            iLQR 配置
-# ============================================================================
-ilqr:
-  # 优化参数
-  max_iterations: 50          # 最大迭代次数
-  tolerance: 0.0001           # 收敛阈值
-  initial_lambda: 1.0         # 初始正则化参数
-  lambda_factor: 10.0         # lambda 调整因子
-  min_lambda: 0.000001        # 最小 lambda
-  max_lambda: 1000000.0       # 最大 lambda
-  
-  # 状态代价权重 (Q 矩阵对角元素)
-  weight_x: 1.0               # x 位置误差权重
-  weight_y: 1.0               # y 位置误差权重
-  weight_theta: 0.5           # 航向角误差权重
-  weight_v: 0.1               # 速度误差权重
-  
-  # 控制代价权重 (R 矩阵对角元素)
-  weight_acceleration: 0.1    # 加速度代价
-  weight_steering: 0.1        # 转向代价
-  
-  # 终端代价权重因子 (Qf = weight_terminal * Q)
-  weight_terminal: 10.0
-  
-  # 规划参数
-  horizon_time: 3.0           # 规划时域 (s)
-  dt: 0.1                     # 时间步长 (s)
+local_planner_node:
+  ros__parameters:
+    # ========================================================================
+    #                            坐标系配置
+    # ========================================================================
+    global_frame: "map"
+    robot_frame: "base_link"
+    
+    # ========================================================================
+    #                            规划器配置
+    # ========================================================================
+    planning_frequency: 10.0        # 规划频率 (Hz)
+    local_range: 5.0                # 局部障碍物提取范围 (m)
+    lookahead_distance: 10.0        # 参考路径前视距离 (m)
+    obstacle_radius: 0.15           # 障碍物等效半径 (m)
+    obstacle_threshold: 50          # 障碍物阈值 (0-100)
+    obstacle_cluster_dist: 0.3      # 障碍物聚类距离 (m)
+    visualize_lattice: true         # 是否可视化 Lattice 候选轨迹
+    
+    # ========================================================================
+    #                         Lattice Planner 配置
+    # ========================================================================
+    lattice:
+      num_width_samples: 7          # 横向采样数量
+      num_time_samples: 5           # 时间采样数量
+      max_lateral_offset: 1.0       # 最大横向偏移 (m)
+      min_planning_time: 2.0        # 最小规划时间 (s)
+      max_planning_time: 4.0        # 最大规划时间 (s)
+      time_resolution: 0.1          # 时间分辨率 (s)
+      safe_distance: 0.3            # 安全距离 (m)
+    
+    # ========================================================================
+    #                            车辆参数
+    # ========================================================================
+    vehicle:
+      wheelbase: 0.5                # 轴距 (m)
+      width: 0.4                    # 车宽 (m)
+      max_speed: 1.0                # 最大速度 (m/s)
+      max_acceleration: 1.0         # 最大加速度 (m/s²)
+      max_steering_angle: 0.5       # 最大前轮转角 (rad)
+      max_curvature: 1.0            # 最大曲率 (1/m)

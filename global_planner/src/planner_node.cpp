@@ -373,9 +373,7 @@ void GlobalPlannerNode::executePlanning(const std::shared_ptr<GoalHandleComputeP
         return checkCollision(x, y);
     };
     
-    auto pruned = smoother_->prunePath(path_points, is_occupied);
-    auto dense_path = smoother_->fixDensity(pruned, smoother_config_.density_step);
-    auto final_path = smoother_->segmentedSmooth(dense_path, is_occupied, smoother_config_.sample_step);
+    auto final_path = smoother_->segmentedSmooth(path_points, is_occupied, smoother_config_.sample_step);
     
     auto end_time = std::chrono::steady_clock::now();
     auto duration_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
