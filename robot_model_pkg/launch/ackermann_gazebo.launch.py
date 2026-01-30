@@ -1,7 +1,7 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, TimerAction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
@@ -13,8 +13,9 @@ def generate_launch_description():
     # ============================================================================
     package_name = 'robot_model_pkg'
     pkg_path = get_package_share_directory(package_name)
-    xacro_file = os.path.join(pkg_path, 'urdf', 'tri_wheel_robot.urdf.xacro')
+    xacro_file = os.path.join(pkg_path, 'urdf', 'ackermann_robot.urdf.xacro')
     rviz_config = os.path.join(pkg_path, 'rviz', 'robot_sensors.rviz')
+    world_file = os.path.join(pkg_path, 'worlds', 'test_world.sdf')
 
     # ============================================================================
     #                            Launch 参数
@@ -24,17 +25,17 @@ def generate_launch_description():
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
         default_value='true',
-        description='Use simulation (Gazebo) clock if true'
+        description='Use simulation clock'
     )
 
     # ============================================================================
-    #                            解析 Xacro
+    #                            Robot Description
     # ============================================================================
     robot_description_config = Command(['xacro ', xacro_file])
     robot_description = ParameterValue(robot_description_config, value_type=str)
 
     # ============================================================================
-    #                            Robot State Publisher
+    #                            Nodes
     # ============================================================================
     node_robot_state_publisher = Node(
         package='robot_state_publisher',
@@ -46,11 +47,7 @@ def generate_launch_description():
         }]
     )
 
-    # ============================================================================
-    #                            启动 Gazebo
-    # ============================================================================
-    world_file = os.path.join(pkg_path, 'worlds', 'test_world.sdf')
-    
+    # Gazebo
     gz_sim_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory('ros_gz_sim'), 'launch', 'gz_sim.launch.py')
@@ -58,67 +55,60 @@ def generate_launch_description():
         launch_arguments={'gz_args': f'-r {world_file}'}.items(),
     )
 
-    # ============================================================================
-    #                            在 Gazebo 中生成机器人
-    # ============================================================================
+    # Spawn robot
     node_spawn_entity = Node(
         package='ros_gz_sim',
         executable='create',
         output='screen',
         arguments=[
             '-topic', 'robot_description', 
-            '-name', 'tri_wheel_robot', 
-            '-z', '0.5'
+            '-name', 'ackermann_robot', 
+            '-z', '0.1'
         ]
     )
 
-    # ============================================================================
-    #                            ROS-Gazebo 桥接器 (使用命令行参数)
-    # ============================================================================
-    # 基础话题桥接
+    # Bridge - Core
     node_bridge_core = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         name='bridge_core',
         arguments=[
-            # 时钟
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock',
-            # 控制
+            # 速度控制 (后轮驱动)
             '/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist',
-            '/caster_steering/set_position@std_msgs/msg/Float64]gz.msgs.Double',
+            # 转向角控制 (前轮转向) - 直接控制转角 (rad)
+            '/steering_angle@std_msgs/msg/Float64]gz.msgs.Double',
         ],
         output='screen'
     )
 
-    # 里程计和 TF 桥接 (尝试多种可能的话题名)
+    # Bridge - Odometry
     node_bridge_odom = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         name='bridge_odom',
         arguments=[
-            # 里程计 - 直接话题
             '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-            # TF
             '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
         ],
         output='screen'
     )
 
-    # 带模型前缀的里程计桥接（备用）
-    node_bridge_odom_model = Node(
+    # Bridge - Joint States
+    node_bridge_joint_states = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
-        name='bridge_odom_model',
+        name='bridge_joint_states',
         arguments=[
-            '/model/tri_wheel_robot/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry',
+            '/world/test_world/model/ackermann_robot/joint_state@sensor_msgs/msg/JointState[gz.msgs.Model',
         ],
         remappings=[
-            ('/model/tri_wheel_robot/odometry', '/odom'),
+            ('/world/test_world/model/ackermann_robot/joint_state', '/joint_states'),
         ],
         output='screen'
     )
 
-    # IMU 桥接
+    # Bridge - IMU
     node_bridge_imu = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
@@ -129,37 +119,19 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 激光雷达桥接 - 3D 点云
+    # Bridge - LiDAR
     node_bridge_lidar = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         name='bridge_lidar',
         arguments=[
-            # 3D 点云 (gpu_lidar 输出)
             '/scan/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked',
-            # 2D 扫描 (如果有的话)
             '/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan',
         ],
         output='screen'
     )
 
-    # Joint States 桥接 (关键！用于轮子 TF)
-    node_bridge_joint_states = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        name='bridge_joint_states',
-        arguments=[
-            '/world/test_world/model/tri_wheel_robot/joint_state@sensor_msgs/msg/JointState[gz.msgs.Model',
-        ],
-        remappings=[
-            ('/world/test_world/model/tri_wheel_robot/joint_state', '/joint_states'),
-        ],
-        output='screen'
-    )
-
-    # ============================================================================
-    #                            图像桥接器
-    # ============================================================================
+    # Bridge - Images
     node_image_bridge = Node(
         package='ros_gz_image',
         executable='image_bridge',
@@ -173,11 +145,8 @@ def generate_launch_description():
         output='screen'
     )
 
-    # ============================================================================
-    #                            静态 TF: odom -> base_footprint (临时方案)
-    # ============================================================================
-    # 如果 Gazebo 的 TF 桥接不工作，提供一个静态 TF
-    node_static_tf_odom = Node(
+    # Static TF (backup)
+    node_static_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_tf_odom_base',
@@ -186,9 +155,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # ============================================================================
-    #                            RViz 可视化
-    # ============================================================================
+    # RViz
     node_rviz = Node(
         package='rviz2',
         executable='rviz2',
@@ -198,24 +165,17 @@ def generate_launch_description():
         output='screen'
     )
 
-    # ============================================================================
-    #                            返回 Launch Description
-    # ============================================================================
     return LaunchDescription([
         declare_use_sim_time,
         node_robot_state_publisher,
         gz_sim_launch,
         node_spawn_entity,
-        # 桥接节点
         node_bridge_core,
         node_bridge_odom,
-        node_bridge_odom_model,
+        node_bridge_joint_states,
         node_bridge_imu,
         node_bridge_lidar,
-        node_bridge_joint_states,
         node_image_bridge,
-        # 静态 TF (备用)
-        node_static_tf_odom,
-        # RViz
+        node_static_tf,
         node_rviz,
     ])

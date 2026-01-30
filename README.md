@@ -19,10 +19,19 @@
 - **Lifecycle Node**：完整的生命周期管理
 - **诊断信息**：实时发布规划状态和性能指标
 
+### 局部路径规划 (Local Planner) - 新增
+- **Lattice Planner**：基于采样的轨迹规划
+  - Frenet 坐标系规划
+  - 五次多项式轨迹生成
+  - 多目标代价函数优化
+- **iLQR**：迭代线性二次调节器
+  - 非线性轨迹优化
+  - 自行车运动学模型
+  - 反馈增益计算
+
 ### 即将支持
 - [ ] RRT-Connect 算法
 - [ ] Dijkstra 算法
-- [ ] 局部路径规划 (Local Planner)
 - [ ] MPC 轨迹跟踪控制
 - [ ] 纯追踪控制器 (Pure Pursuit)
 

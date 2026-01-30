@@ -50,9 +50,9 @@ public:
     /**
      * @brief 三次样条平滑 - 生成连续可微曲线
      */
-    std::vector<Pose2D> smooth(const std::vector<Pose2D>& path,
-                               const CollisionChecker& is_occupied,
-                               double sample_step = -1.0);
+    std::vector<Pose2D> splineSmooth(const std::vector<Pose2D>& path,
+                                    const CollisionChecker& is_occupied,
+                                    double sample_step = -1.0);
     
     /**
      * @brief 梯度下降后处理 - 优化平滑度和避障

@@ -14,6 +14,13 @@
   <xacro:property name="drive_wheel_mass" value="20" /> <!-- 驱动轮质量 -->
   <xacro:property name="steering_wheel_mass" value="20" /> <!-- 转向轮质量 -->
   <xacro:property name="steering_link_mass" value="10" /> <!-- 转向连杆质量 -->
+  
+  <!-- ========================= 传感器参数 ========================= -->
+  <xacro:property name="lidar_height" value="0.1" />      <!-- 激光雷达高度 -->
+  <xacro:property name="lidar_radius" value="0.05" />     <!-- 激光雷达半径 -->
+  <xacro:property name="camera_size" value="0.05" />      <!-- 相机尺寸 -->
+  <xacro:property name="imu_size" value="0.02" />         <!-- IMU 尺寸 -->
+
   <!-- ========================= 添加虚拟根链接 ========================= -->
   <link name="base_footprint">
     <!-- 这个链接没有惯性，没有碰撞和视觉，只是一个参考点 -->
@@ -103,6 +110,7 @@
     <origin xyz="0.616 -${wheel_y_offset} -${base_height/2}" rpy="1.5708 0 0"/>
     <axis xyz="0 0 1"/>
   </joint>
+
   <!-- ========================= 定义前转向轮（可转向） ========================= -->
   <!-- 1. 转向臂连杆 (只是一个用于转向的连接杆) -->
   <link name="caster_steering_link">
@@ -164,7 +172,238 @@
     <axis xyz="0 0 1"/> <!-- 轮子绕自己的Z轴旋转（滚动） -->
   </joint>
 
-  <!-- ========================= Gazebo 物理属性 ========================= -->
+  <!-- ============================================================================ -->
+  <!--                              传感器定义                                       -->
+  <!-- ============================================================================ -->
+
+  <!-- ========================= IMU 传感器 ========================= -->
+  <!-- 
+    IMU (惯性测量单元) 安装在车体中心
+    输出：
+    - 角速度 (gyroscope): rad/s
+    - 线性加速度 (accelerometer): m/s²
+    - 姿态 (orientation): 四元数
+  -->
+  <link name="imu_link">
+    <visual>
+      <geometry>
+        <box size="${imu_size} ${imu_size} ${imu_size}"/>
+      </geometry>
+      <material name="red">
+        <color rgba="1.0 0.0 0.0 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${imu_size} ${imu_size} ${imu_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ========================= 多线激光雷达 (3D LiDAR) ========================= -->
+  <!-- 
+    模拟 Velodyne VLP-16 或 Ouster OS1-32 类型的多线激光雷达
+    安装在车顶中央，提供 360° 水平视角
+    参数：
+    - 水平视角: 360°
+    - 垂直视角: -15° ~ +15° (共 16 线)
+    - 最大距离: 100m
+    - 更新频率: 10Hz
+  -->
+  <link name="lidar_link">
+    <visual>
+      <geometry>
+        <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+      </geometry>
+      <material name="dark_gray">
+        <color rgba="0.2 0.2 0.2 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.5"/>
+      <inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/>
+    </inertial>
+  </link>
+
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <!-- 安装在车顶中央 -->
+    <origin xyz="0 0 ${base_height/2 + lidar_height/2 + 0.02}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ========================= 前置深度相机 (RGB-D Camera) ========================= -->
+  <!-- 
+    模拟 Intel RealSense D435 类型的深度相机
+    安装在车体前方，用于近距离障碍物检测和视觉感知
+    输出：
+    - RGB 图像: 640x480 @ 30fps
+    - 深度图像: 640x480 @ 30fps
+    - 点云数据
+  -->
+  <link name="front_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <!-- 相机光学坐标系 (Z 朝前, X 朝右, Y 朝下) -->
+  <link name="front_camera_optical_link"/>
+
+  <joint name="front_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_camera_link"/>
+    <!-- 安装在车体前方上部 -->
+    <origin xyz="${base_length/2 - 0.05} 0 ${base_height/4}" rpy="0 0 0"/>
+  </joint>
+
+  <joint name="front_camera_optical_joint" type="fixed">
+    <parent link="front_camera_link"/>
+    <child link="front_camera_optical_link"/>
+    <!-- 从 ROS 坐标系 (X前Y左Z上) 转换到相机光学坐标系 (Z前X右Y下) -->
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- ========================= 后置相机 ========================= -->
+  <!-- 用于倒车辅助和后方监控 -->
+  <link name="rear_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <link name="rear_camera_optical_link"/>
+
+  <joint name="rear_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_camera_link"/>
+    <!-- 安装在车体后方，朝后看 -->
+    <origin xyz="${-base_length/2 + 0.05} 0 ${base_height/4}" rpy="0 0 ${pi}"/>
+  </joint>
+
+  <joint name="rear_camera_optical_joint" type="fixed">
+    <parent link="rear_camera_link"/>
+    <child link="rear_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- ========================= 左侧相机 ========================= -->
+  <link name="left_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <link name="left_camera_optical_link"/>
+
+  <joint name="left_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_camera_link"/>
+    <origin xyz="0 ${base_width/2 - 0.05} ${base_height/4}" rpy="0 0 ${pi/2}"/>
+  </joint>
+
+  <joint name="left_camera_optical_joint" type="fixed">
+    <parent link="left_camera_link"/>
+    <child link="left_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- ========================= 右侧相机 ========================= -->
+  <link name="right_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black">
+        <color rgba="0.1 0.1 0.1 1.0"/>
+      </material>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <link name="right_camera_optical_link"/>
+
+  <joint name="right_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_camera_link"/>
+    <origin xyz="0 ${-base_width/2 + 0.05} ${base_height/4}" rpy="0 0 ${-pi/2}"/>
+  </joint>
+
+  <joint name="right_camera_optical_joint" type="fixed">
+    <parent link="right_camera_link"/>
+    <child link="right_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <!-- ============================================================================ -->
+  <!--                            Gazebo 物理属性                                    -->
+  <!-- ============================================================================ -->
+  
   <gazebo reference="base_link">
     <material>Gazebo/Blue</material>
   </gazebo>
@@ -199,8 +438,280 @@
     <kd>10.0</kd>
   </gazebo>
 
-  <!-- ========================= Gazebo 差速驱动插件 ========================= -->
-  <!-- 1. 差速驱动插件 -->
+  <!-- 传感器外观 -->
+  <gazebo reference="imu_link">
+    <material>Gazebo/Red</material>
+  </gazebo>
+
+  <gazebo reference="lidar_link">
+    <material>Gazebo/DarkGrey</material>
+  </gazebo>
+
+  <gazebo reference="front_camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="rear_camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="left_camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <gazebo reference="right_camera_link">
+    <material>Gazebo/Black</material>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                            Gazebo 传感器插件                                  -->
+  <!-- ============================================================================ -->
+
+  <!-- ========================= IMU 传感器插件 ========================= -->
+  <gazebo reference="imu_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>imu</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <imu>
+        <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.0002</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.0002</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.0002</stddev>
+            </noise>
+          </z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.017</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.017</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.017</stddev>
+            </noise>
+          </z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- ========================= 3D 激光雷达插件 (模拟 16 线激光雷达) ========================= -->
+  <gazebo reference="lidar_link">
+    <sensor name="lidar_3d" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <topic>scan/points</topic>
+      <gz_frame_id>lidar_link</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>1800</samples>        <!-- 水平采样点数 (0.2° 分辨率) -->
+            <resolution>1</resolution>
+            <min_angle>-3.14159</min_angle> <!-- -180° -->
+            <max_angle>3.14159</max_angle>  <!-- +180° -->
+          </horizontal>
+          <vertical>
+            <samples>32</samples>           <!-- 32 线激光雷达 -->
+            <resolution>1</resolution>
+            <min_angle>-0.5236</min_angle>  <!-- -30° -->
+            <max_angle>0.1745</max_angle>   <!-- +10° (向下看多一些) -->
+          </vertical>
+        </scan>
+        <range>
+          <min>0.3</min>
+          <max>100.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.02</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <!-- ========================= 2D 激光雷达 (用于导航) ========================= -->
+  <!-- 从 3D 点云中提取一个水平扫描平面用于 2D 导航 -->
+  <gazebo reference="lidar_link">
+    <sensor name="lidar_2d" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>20</update_rate>
+      <topic>scan</topic>
+      <gz_frame_id>lidar_link</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+          <vertical>
+            <samples>1</samples>
+            <resolution>1</resolution>
+            <min_angle>0</min_angle>
+            <max_angle>0</max_angle>
+          </vertical>
+        </scan>
+        <range>
+          <min>0.3</min>
+          <max>30.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <!-- ========================= 前置深度相机插件 ========================= -->
+  <gazebo reference="front_camera_link">
+    <!-- RGB 相机 -->
+    <sensor name="front_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>front_camera/image_raw</topic>
+      <gz_frame_id>front_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov> <!-- 60° -->
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.007</stddev>
+        </noise>
+      </camera>
+    </sensor>
+
+    <!-- 深度相机 -->
+    <sensor name="front_camera_depth" type="depth_camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>front_camera/depth</topic>
+      <gz_frame_id>front_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R_FLOAT32</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>10.0</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ========================= 后置相机插件 ========================= -->
+  <gazebo reference="rear_camera_link">
+    <sensor name="rear_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>rear_camera/image_raw</topic>
+      <gz_frame_id>rear_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ========================= 左侧相机插件 ========================= -->
+  <gazebo reference="left_camera_link">
+    <sensor name="left_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>left_camera/image_raw</topic>
+      <gz_frame_id>left_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ========================= 右侧相机插件 ========================= -->
+  <gazebo reference="right_camera_link">
+    <sensor name="right_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>right_camera/image_raw</topic>
+      <gz_frame_id>right_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.047</horizontal_fov>
+        <image>
+          <width>640</width>
+          <height>480</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>0.1</near>
+          <far>100</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                            Gazebo 控制器插件                                  -->
+  <!-- ============================================================================ -->
+  <!-- 注意: Sensors 和 IMU 系统插件已在世界文件 (test_world.sdf) 中定义 -->
+
+  <!-- ========================= 差速驱动插件 ========================= -->
   <gazebo>
     <plugin name="gz::sim::systems::DiffDrive" filename="gz-sim-diff-drive-system">
       <left_joint>left_wheel_joint</left_joint>
@@ -209,10 +720,14 @@
       <wheel_radius>${wheel_radius}</wheel_radius>
       <odom_publish_frequency>50.0</odom_publish_frequency>
       <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
     </plugin>
   </gazebo>
 
-  <!-- 2. 转向关节控制器 -->
+  <!-- ========================= 转向关节控制器 ========================= -->
   <gazebo>
     <plugin name="gz::sim::systems::JointPositionController" filename="gz-sim-joint-position-controller-system">
       <joint_name>caster_steering_joint</joint_name>
@@ -226,7 +741,7 @@
     </plugin>
   </gazebo>
 
-  <!-- 3. 关节状态发布器 -->
+  <!-- ========================= 关节状态发布器 ========================= -->
   <gazebo>
     <plugin name="gz::sim::systems::JointStatePublisher" filename="gz-sim-joint-state-publisher-system">
       <joint_name>left_wheel_joint</joint_name>
@@ -236,4 +751,5 @@
       <update_rate>50.0</update_rate>
     </plugin>
   </gazebo>
+
 </robot>

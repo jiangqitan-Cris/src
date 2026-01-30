@@ -62,9 +62,9 @@ std::vector<Pose2D> IntegratedSmoother::fixDensity(const std::vector<Pose2D>& pa
     return dense_path;
 }
 
-std::vector<Pose2D> IntegratedSmoother::smooth(const std::vector<Pose2D>& path,
-                                                const CollisionChecker& is_occupied,
-                                                double sample_step) {
+std::vector<Pose2D> IntegratedSmoother::splineSmooth(const std::vector<Pose2D>& path,
+                                                    const CollisionChecker& is_occupied,
+                                                    double sample_step) {
     if (path.size() < 2) {
         return path;
     }

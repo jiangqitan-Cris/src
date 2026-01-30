@@ -13,12 +13,15 @@ find_package(ament_cmake REQUIRED)
 
 install(DIRECTORY
   launch
+  rviz
+  config
+  worlds
   DESTINATION share/${PROJECT_NAME}/
 )
 
-install(FILES
-  urdf/tri_wheel_robot.urdf.xacro
-  DESTINATION share/${PROJECT_NAME}/urdf/
+install(DIRECTORY
+  urdf
+  DESTINATION share/${PROJECT_NAME}/
 )
 
 if(BUILD_TESTING)

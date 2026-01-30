@@ -1,0 +1,676 @@
+<?xml version="1.0"?>
+<robot name="ackermann_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ============================================================================ -->
+  <!--                              机器人参数                                       -->
+  <!-- ============================================================================ -->
+  
+  <!-- 车体参数 (室内小型机器人) -->
+  <xacro:property name="body_length" value="0.45" />   <!-- 车体长 45cm -->
+  <xacro:property name="body_width"  value="0.30" />   <!-- 车体宽 30cm -->
+  <xacro:property name="body_height" value="0.12" />   <!-- 车体高 12cm -->
+  <xacro:property name="body_mass" value="5.0" />      <!-- 车体质量 5kg -->
+  
+  <!-- 轮子参数 -->
+  <xacro:property name="wheel_radius" value="0.05" />  <!-- 轮子半径 5cm -->
+  <xacro:property name="wheel_width"  value="0.04" />  <!-- 轮子宽度 4cm -->
+  <xacro:property name="wheel_mass" value="0.5" />     <!-- 轮子质量 -->
+  
+  <!-- 轴距和轮距 -->
+  <xacro:property name="wheelbase" value="0.32" />     <!-- 前后轴距 32cm -->
+  <xacro:property name="track_width" value="0.26" />   <!-- 左右轮距 26cm -->
+  
+  <!-- 转向参数 -->
+  <xacro:property name="steering_link_length" value="0.03" />
+  <xacro:property name="max_steering_angle" value="0.5236" />  <!-- 30度 -->
+  
+  <!-- 传感器参数 -->
+  <xacro:property name="lidar_radius" value="0.035" />
+  <xacro:property name="lidar_height" value="0.05" />
+  <xacro:property name="camera_size" value="0.025" />
+  
+  <!-- 底盘离地高度 -->
+  <xacro:property name="ground_clearance" value="0.03" />
+
+  <!-- ============================================================================ -->
+  <!--                              颜色材质定义                                     -->
+  <!-- ============================================================================ -->
+  <material name="white"><color rgba="1.0 1.0 1.0 1.0"/></material>
+  <material name="black"><color rgba="0.1 0.1 0.1 1.0"/></material>
+  <material name="dark_gray"><color rgba="0.3 0.3 0.3 1.0"/></material>
+  <material name="light_gray"><color rgba="0.7 0.7 0.7 1.0"/></material>
+  <material name="blue"><color rgba="0.2 0.4 0.8 1.0"/></material>
+  <material name="red"><color rgba="0.8 0.2 0.2 1.0"/></material>
+  <material name="orange"><color rgba="1.0 0.5 0.0 1.0"/></material>
+
+  <!-- ============================================================================ -->
+  <!--                              惯性矩阵宏                                       -->
+  <!-- ============================================================================ -->
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertial>
+      <mass value="${m}"/>
+      <inertia ixx="${m*(y*y+z*z)/12}" ixy="0" ixz="0"
+               iyy="${m*(x*x+z*z)/12}" iyz="0"
+               izz="${m*(x*x+y*y)/12}"/>
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="cylinder_inertia" params="m r h">
+    <inertial>
+      <mass value="${m}"/>
+      <inertia ixx="${m*(3*r*r+h*h)/12}" ixy="0" ixz="0"
+               iyy="${m*(3*r*r+h*h)/12}" iyz="0"
+               izz="${m*r*r/2}"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- ============================================================================ -->
+  <!--                              轮子宏定义                                       -->
+  <!-- ============================================================================ -->
+  <xacro:macro name="wheel" params="name parent x y z">
+    <link name="${name}_link">
+      <visual>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="dark_gray"/>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_width}"/>
+    </link>
+
+    <joint name="${name}_joint" type="continuous">
+      <parent link="${parent}"/>
+      <child link="${name}_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="${-pi/2} 0 0"/>
+      <axis xyz="0 0 1"/>
+      <dynamics damping="0.1" friction="0.1"/>
+    </joint>
+
+    <gazebo reference="${name}_link">
+      <material>Gazebo/DarkGrey</material>
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+      <kp>1000000.0</kp>
+      <kd>10.0</kd>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ============================================================================ -->
+  <!--                              转向轮宏定义                                     -->
+  <!-- ============================================================================ -->
+  <xacro:macro name="steering_wheel" params="name side x y">
+    <!-- 转向连杆 -->
+    <link name="${name}_steering_link">
+      <visual>
+        <origin xyz="0 0 ${-steering_link_length/2}" rpy="0 0 0"/>
+        <geometry>
+          <cylinder radius="0.01" length="${steering_link_length}"/>
+        </geometry>
+        <material name="light_gray"/>
+      </visual>
+      <inertial>
+        <mass value="0.1"/>
+        <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      </inertial>
+    </link>
+
+    <!-- 转向关节 -->
+    <joint name="${name}_steering_joint" type="revolute">
+      <parent link="base_link"/>
+      <child link="${name}_steering_link"/>
+      <origin xyz="${x} ${y} 0" rpy="0 0 0"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="${-max_steering_angle}" upper="${max_steering_angle}" effort="10" velocity="1.0"/>
+      <dynamics damping="0.5" friction="0.1"/>
+    </joint>
+
+    <!-- 轮子 -->
+    <link name="${name}_wheel_link">
+      <visual>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="dark_gray"/>
+      </visual>
+      <collision>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_width}"/>
+    </link>
+
+    <!-- 轮子滚动关节 -->
+    <joint name="${name}_wheel_joint" type="continuous">
+      <parent link="${name}_steering_link"/>
+      <child link="${name}_wheel_link"/>
+      <origin xyz="0 0 ${-steering_link_length}" rpy="${-pi/2} 0 0"/>
+      <axis xyz="0 0 1"/>
+      <dynamics damping="0.1" friction="0.1"/>
+    </joint>
+
+    <gazebo reference="${name}_steering_link">
+      <material>Gazebo/Grey</material>
+    </gazebo>
+
+    <gazebo reference="${name}_wheel_link">
+      <material>Gazebo/DarkGrey</material>
+      <mu1>1.0</mu1>
+      <mu2>1.0</mu2>
+      <kp>1000000.0</kp>
+      <kd>10.0</kd>
+    </gazebo>
+  </xacro:macro>
+
+  <!-- ============================================================================ -->
+  <!--                              base_footprint (地面参考点)                      -->
+  <!-- ============================================================================ -->
+  <link name="base_footprint"/>
+
+  <!-- ============================================================================ -->
+  <!--                              车体 base_link                                   -->
+  <!-- ============================================================================ -->
+  <link name="base_link">
+    <!-- 主车体 -->
+    <visual>
+      <origin xyz="0 0 ${body_height/2}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+      <material name="blue"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${body_height/2}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${body_length} ${body_width} ${body_height}"/>
+      </geometry>
+    </collision>
+    <xacro:box_inertia m="${body_mass}" x="${body_length}" y="${body_width}" z="${body_height}"/>
+  </link>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 ${wheel_radius + ground_clearance}" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="base_link">
+    <material>Gazebo/Blue</material>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              后驱动轮 (固定方向)                              -->
+  <!-- ============================================================================ -->
+  <xacro:wheel name="rear_left_wheel" parent="base_link" 
+               x="${-wheelbase/2}" y="${track_width/2 + wheel_width/2}" z="0"/>
+  <xacro:wheel name="rear_right_wheel" parent="base_link" 
+               x="${-wheelbase/2}" y="${-track_width/2 - wheel_width/2}" z="0"/>
+
+  <!-- ============================================================================ -->
+  <!--                              前转向轮                                         -->
+  <!-- ============================================================================ -->
+  <xacro:steering_wheel name="front_left" side="left" 
+                        x="${wheelbase/2}" y="${track_width/2 + wheel_width/2}"/>
+  <xacro:steering_wheel name="front_right" side="right" 
+                        x="${wheelbase/2}" y="${-track_width/2 - wheel_width/2}"/>
+
+  <!-- ============================================================================ -->
+  <!--                              传感器支架                                       -->
+  <!-- ============================================================================ -->
+  <!-- 顶部传感器平台 -->
+  <link name="sensor_platform_link">
+    <visual>
+      <geometry>
+        <box size="0.15 0.12 0.01"/>
+      </geometry>
+      <material name="light_gray"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.15 0.12 0.01"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="sensor_platform_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="sensor_platform_link"/>
+    <origin xyz="0 0 ${body_height + 0.005}" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="sensor_platform_link">
+    <material>Gazebo/Grey</material>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              IMU 传感器                                       -->
+  <!-- ============================================================================ -->
+  <link name="imu_link">
+    <visual>
+      <geometry>
+        <box size="0.02 0.02 0.01"/>
+      </geometry>
+      <material name="red"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="0.02 0.02 0.01"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.01"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 ${body_height/2}" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="imu_link">
+    <material>Gazebo/Red</material>
+    <sensor name="imu_sensor" type="imu">
+      <always_on>true</always_on>
+      <update_rate>100</update_rate>
+      <topic>imu</topic>
+      <gz_frame_id>imu_link</gz_frame_id>
+      <imu>
+        <angular_velocity>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0002</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0002</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0002</stddev></noise></z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x><noise type="gaussian"><mean>0.0</mean><stddev>0.017</stddev></noise></x>
+          <y><noise type="gaussian"><mean>0.0</mean><stddev>0.017</stddev></noise></y>
+          <z><noise type="gaussian"><mean>0.0</mean><stddev>0.017</stddev></noise></z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              3D 激光雷达                                      -->
+  <!-- ============================================================================ -->
+  <link name="lidar_link">
+    <visual>
+      <geometry>
+        <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry>
+        <cylinder radius="${lidar_radius}" length="${lidar_height}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.2"/>
+      <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+    </inertial>
+  </link>
+
+  <joint name="lidar_joint" type="fixed">
+    <parent link="sensor_platform_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0 0 ${0.005 + lidar_height/2}" rpy="0 0 0"/>
+  </joint>
+
+  <gazebo reference="lidar_link">
+    <material>Gazebo/Black</material>
+    <!-- 3D LiDAR (32线) -->
+    <sensor name="lidar_3d" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>10</update_rate>
+      <topic>scan/points</topic>
+      <gz_frame_id>lidar_link</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>1200</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+          <vertical>
+            <samples>32</samples>
+            <resolution>1</resolution>
+            <min_angle>-0.5236</min_angle>
+            <max_angle>0.1745</max_angle>
+          </vertical>
+        </scan>
+        <range>
+          <min>0.1</min>
+          <max>30.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.01</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+    <!-- 2D LiDAR -->
+    <sensor name="lidar_2d" type="gpu_lidar">
+      <always_on>true</always_on>
+      <update_rate>20</update_rate>
+      <topic>scan</topic>
+      <gz_frame_id>lidar_link</gz_frame_id>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>720</samples>
+            <resolution>1</resolution>
+            <min_angle>-3.14159</min_angle>
+            <max_angle>3.14159</max_angle>
+          </horizontal>
+          <vertical>
+            <samples>1</samples>
+            <resolution>1</resolution>
+            <min_angle>0</min_angle>
+            <max_angle>0</max_angle>
+          </vertical>
+        </scan>
+        <range>
+          <min>0.1</min>
+          <max>15.0</max>
+          <resolution>0.01</resolution>
+        </range>
+        <noise>
+          <type>gaussian</type>
+          <mean>0.0</mean>
+          <stddev>0.005</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              前置深度相机                                     -->
+  <!-- ============================================================================ -->
+  <link name="front_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <link name="front_camera_optical_link"/>
+
+  <joint name="front_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="front_camera_link"/>
+    <origin xyz="${body_length/2} 0 ${body_height*0.7}" rpy="0 0.1 0"/>
+  </joint>
+
+  <joint name="front_camera_optical_joint" type="fixed">
+    <parent link="front_camera_link"/>
+    <child link="front_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <gazebo reference="front_camera_link">
+    <material>Gazebo/Black</material>
+    <sensor name="front_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>front_camera/image_raw</topic>
+      <gz_frame_id>front_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.05</near><far>50</far></clip>
+      </camera>
+    </sensor>
+    <sensor name="front_camera_depth" type="depth_camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>front_camera/depth</topic>
+      <gz_frame_id>front_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R_FLOAT32</format></image>
+        <clip><near>0.05</near><far>8.0</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              后置相机                                         -->
+  <!-- ============================================================================ -->
+  <link name="rear_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <link name="rear_camera_optical_link"/>
+
+  <joint name="rear_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="rear_camera_link"/>
+    <origin xyz="${-body_length/2} 0 ${body_height*0.7}" rpy="0 0.1 ${pi}"/>
+  </joint>
+
+  <joint name="rear_camera_optical_joint" type="fixed">
+    <parent link="rear_camera_link"/>
+    <child link="rear_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <gazebo reference="rear_camera_link">
+    <material>Gazebo/Black</material>
+    <sensor name="rear_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>rear_camera/image_raw</topic>
+      <gz_frame_id>rear_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.05</near><far>50</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              左侧相机                                         -->
+  <!-- ============================================================================ -->
+  <link name="left_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <link name="left_camera_optical_link"/>
+
+  <joint name="left_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="left_camera_link"/>
+    <origin xyz="0 ${body_width/2} ${body_height*0.7}" rpy="0 0 ${pi/2}"/>
+  </joint>
+
+  <joint name="left_camera_optical_joint" type="fixed">
+    <parent link="left_camera_link"/>
+    <child link="left_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <gazebo reference="left_camera_link">
+    <material>Gazebo/Black</material>
+    <sensor name="left_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>left_camera/image_raw</topic>
+      <gz_frame_id>left_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.05</near><far>50</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              右侧相机                                         -->
+  <!-- ============================================================================ -->
+  <link name="right_camera_link">
+    <visual>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry>
+        <box size="${camera_size} ${camera_size*2} ${camera_size}"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00001" ixy="0" ixz="0" iyy="0.00001" iyz="0" izz="0.00001"/>
+    </inertial>
+  </link>
+
+  <link name="right_camera_optical_link"/>
+
+  <joint name="right_camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="right_camera_link"/>
+    <origin xyz="0 ${-body_width/2} ${body_height*0.7}" rpy="0 0 ${-pi/2}"/>
+  </joint>
+
+  <joint name="right_camera_optical_joint" type="fixed">
+    <parent link="right_camera_link"/>
+    <child link="right_camera_optical_link"/>
+    <origin xyz="0 0 0" rpy="${-pi/2} 0 ${-pi/2}"/>
+  </joint>
+
+  <gazebo reference="right_camera_link">
+    <material>Gazebo/Black</material>
+    <sensor name="right_camera_rgb" type="camera">
+      <always_on>true</always_on>
+      <update_rate>30</update_rate>
+      <topic>right_camera/image_raw</topic>
+      <gz_frame_id>right_camera_optical_link</gz_frame_id>
+      <camera>
+        <horizontal_fov>1.2</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.05</near><far>50</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <!-- ============================================================================ -->
+  <!--                              Gazebo 控制器插件                                -->
+  <!-- ============================================================================ -->
+
+  <!-- ==================== 后轮驱动 (差速驱动) ==================== -->
+  <!-- 使用 cmd_vel 控制速度 -->
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system" name="gz::sim::systems::DiffDrive">
+      <left_joint>rear_left_wheel_joint</left_joint>
+      <right_joint>rear_right_wheel_joint</right_joint>
+      <wheel_separation>${track_width}</wheel_separation>
+      <wheel_radius>${wheel_radius}</wheel_radius>
+      <odom_publish_frequency>50</odom_publish_frequency>
+      <topic>cmd_vel</topic>
+      <odom_topic>odom</odom_topic>
+      <tf_topic>tf</tf_topic>
+      <frame_id>odom</frame_id>
+      <child_frame_id>base_footprint</child_frame_id>
+    </plugin>
+  </gazebo>
+
+  <!-- ==================== 前轮转向控制 ==================== -->
+  <!-- 
+    控制话题: /steering_angle
+    消息类型: std_msgs/Float64
+    单位: rad (弧度)
+    范围: -0.5236 ~ +0.5236 (±30°)
+    正值 = 左转, 负值 = 右转
+  -->
+  
+  <!-- 左前轮转向 -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>front_left_steering_joint</joint_name>
+      <topic>steering_angle</topic>
+      <p_gain>100.0</p_gain>
+      <i_gain>0.1</i_gain>
+      <d_gain>5.0</d_gain>
+    </plugin>
+  </gazebo>
+
+  <!-- 右前轮转向 (使用相同话题，实现同步转向) -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-position-controller-system" name="gz::sim::systems::JointPositionController">
+      <joint_name>front_right_steering_joint</joint_name>
+      <topic>steering_angle</topic>
+      <p_gain>100.0</p_gain>
+      <i_gain>0.1</i_gain>
+      <d_gain>5.0</d_gain>
+    </plugin>
+  </gazebo>
+
+  <!-- 关节状态发布器 -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system" name="gz::sim::systems::JointStatePublisher">
+      <joint_name>front_left_steering_joint</joint_name>
+      <joint_name>front_left_wheel_joint</joint_name>
+      <joint_name>front_right_steering_joint</joint_name>
+      <joint_name>front_right_wheel_joint</joint_name>
+      <joint_name>rear_left_wheel_joint</joint_name>
+      <joint_name>rear_right_wheel_joint</joint_name>
+      <update_rate>50</update_rate>
+    </plugin>
+  </gazebo>
+
+</robot>
