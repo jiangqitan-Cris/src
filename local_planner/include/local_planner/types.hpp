@@ -168,16 +168,16 @@ struct Obstacle {
  */
 struct VehicleParams {
     // 几何参数
-    double wheelbase = 0.5;           // 轴距 (m)
+    double wheelbase = 0.32;           // 轴距 (m)
     double front_overhang = 0.1;      // 前悬 (m)
     double rear_overhang = 0.1;       // 后悬 (m)
-    double width = 0.4;               // 车宽 (m)
-    double length = 0.7;              // 车长 (m)
+    double width = 0.3;               // 车宽 (m)
+    double length = 0.45;              // 车长 (m)
     
     // 运动学约束
-    double max_steering_angle = 0.5;  // 最大前轮转角 (rad) ≈ 28.6°
+    double max_steering_angle = 0.5236;  // 最大前轮转角 (rad) ≈ 30°
     double max_steering_rate = 0.5;   // 最大转向角速度 (rad/s)
-    double max_speed = 2.0;           // 最大速度 (m/s)
+    double max_speed = 1.0;           // 最大速度 (m/s)
     double min_speed = -0.5;          // 最小速度 (m/s)，负值表示倒车
     double max_acceleration = 2.0;    // 最大加速度 (m/s²)
     double max_deceleration = 3.0;    // 最大减速度 (m/s²)
@@ -205,7 +205,7 @@ struct VehicleParams {
 struct LatticeConfig {
     // 采样参数
     int num_width_samples = 7;        // 横向采样数量
-    int num_time_samples = 5;         // 时间采样数量
+    int num_time_samples = 10;         // 时间采样数量
     double max_lateral_offset = 2.0;  // 最大横向偏移 (m)
     double min_planning_time = 2.0;   // 最小规划时间 (s)
     double max_planning_time = 6.0;   // 最大规划时间 (s)
@@ -251,6 +251,10 @@ struct ILQRConfig {
     // 规划参数
     double horizon_time = 3.0;        // 规划时域 (s)
     double dt = 0.1;                  // 时间步长 (s)
+    
+    // 避障参数
+    double weight_obstacle = 50.0;    // 障碍物排斥代价权重
+    double safe_distance = 0.5;       // 安全距离 (m)，小于此距离时产生排斥代价
 };
 
 } // namespace local_planner

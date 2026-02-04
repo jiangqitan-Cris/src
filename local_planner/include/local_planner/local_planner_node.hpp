@@ -24,9 +24,11 @@
 
 #include "local_planner/types.hpp"
 #include "local_planner/algorithms/lattice_planner.hpp"
+#include "local_planner/algorithms/ilqr.hpp"
 
 #include <mutex>
 #include <memory>
+#include <string>
 
 namespace local_planner {
 
@@ -96,9 +98,16 @@ private:
                                const std::vector<Obstacle>& obstacles);
     
     /**
-     * @brief 发布 Lattice Planner 候选轨迹可视化
+     * @brief 发布 Lattice Planner 候选轨迹可视化（仅 Lattice 时调用）
      */
     void publishLatticeVisualization();
+    
+    /**
+     * @brief 将参考路径转为 iLQR 初始轨迹（可选）
+     */
+    Trajectory referencePathToInitialTrajectory(const std::vector<State>& reference_path,
+                                                const State& current_state,
+                                                const State& goal_state);
 
     // ========== ROS2 接口 ==========
     
@@ -109,7 +118,6 @@ private:
     
     // 发布者
     rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr local_path_pub_;
-    rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr viz_pub_;
     rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr lattice_viz_pub_;
     
@@ -132,8 +140,11 @@ private:
     
     // ========== 规划器 ==========
     
-    std::unique_ptr<LatticePlanner> planner_;
+    std::string planner_type_;       // "lattice" 或 "ilqr"
+    std::unique_ptr<LatticePlanner> lattice_planner_;
+    std::unique_ptr<ILQR> ilqr_planner_;
     LatticeConfig lattice_config_;
+    ILQRConfig ilqr_config_;
     VehicleParams vehicle_params_;
     
     // ========== 参数 ==========

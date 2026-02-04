@@ -12,7 +12,8 @@
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, TimerAction
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
@@ -27,6 +28,7 @@ def generate_launch_description():
     robot_pkg = get_package_share_directory('robot_model_pkg')
     global_planner_pkg = get_package_share_directory('global_planner')
     local_planner_pkg = get_package_share_directory('local_planner')
+    # trajectory_tracker_pkg = get_package_share_directory('trajectory_tracker')
     
     # ============================================================================
     #                            文件路径
@@ -38,6 +40,8 @@ def generate_launch_description():
     # 配置文件
     global_planner_config = os.path.join(global_planner_pkg, 'params', 'planner_config.yaml')
     local_planner_config = os.path.join(local_planner_pkg, 'params', 'local_planner_config.yaml')
+    amcl_config = os.path.join(local_planner_pkg, 'params', 'amcl.yaml')
+    # tracker_config = os.path.join(trajectory_tracker_pkg, 'params', 'tracker_config.yaml')
     
     # 地图文件
     map_file = os.path.join(global_planner_pkg, 'maps', 'nav.yaml')
@@ -51,6 +55,9 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
     autostart = LaunchConfiguration('autostart', default='true')
     visualize_lattice = LaunchConfiguration('visualize_lattice', default='true')
+    planner_type = LaunchConfiguration('planner_type', default='lattice')
+    use_localization = LaunchConfiguration('use_localization', default='true')
+    # controller_type = LaunchConfiguration('controller_type', default='lqr')
     
     declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time', default_value='true',
@@ -64,8 +71,23 @@ def generate_launch_description():
     
     declare_visualize_lattice = DeclareLaunchArgument(
         'visualize_lattice', default_value='true',
-        description='Visualize Lattice planner candidate trajectories'
+        description='Visualize Lattice planner candidate trajectories (only for lattice)'
     )
+    
+    declare_planner_type = DeclareLaunchArgument(
+        'planner_type', default_value='lattice',
+        description='Local planner algorithm: lattice or ilqr'
+    )
+
+    declare_use_localization = DeclareLaunchArgument(
+        'use_localization', default_value='true',
+        description='Use AMCL localization to publish dynamic map->odom TF (disable to use static map->odom)'
+    )
+
+    # declare_controller_type = DeclareLaunchArgument(
+    #     'controller_type', default_value='lqr',
+    #     description='Trajectory tracker: lqr, pure_pursuit, or mpc'
+    # )
     
     # ============================================================================
     #                            Robot Description
@@ -159,26 +181,47 @@ def generate_launch_description():
     # ============================================================================
     #                            TF
     # ============================================================================
-    # map -> odom 静态变换
+    # map -> odom 静态变换（仅在不启用定位时使用）
     node_static_tf_map_odom = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_tf_map_odom',
         arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
         parameters=[{'use_sim_time': use_sim_time}],
-        output='screen'
+        output='screen',
+        condition=UnlessCondition(use_localization),
     )
     
     # ============================================================================
     #                            地图服务器
     # ============================================================================
-    map_server = Node(
+    map_server = LifecycleNode(
         package='nav2_map_server',
         executable='map_server',
         name='map_server',
+        namespace='',
         parameters=[
             {'yaml_filename': map_file},
             {'use_sim_time': use_sim_time}
+        ]
+    )
+
+    # ============================================================================
+    #                            定位 (AMCL)
+    # ============================================================================
+    amcl_node = LifecycleNode(
+        package='nav2_amcl',
+        executable='amcl',
+        name='amcl',
+        namespace='',
+        output='screen',
+        parameters=[
+            amcl_config,
+            {'use_sim_time': use_sim_time}
+        ],
+        remappings=[
+            ('/scan', '/scan'),
+            ('/map', '/map'),
         ]
     )
     
@@ -217,6 +260,7 @@ def generate_launch_description():
             'autostart': autostart,
             'node_names': [
                 'map_server',
+                'amcl',
                 'global_planner_node'
             ],
             'bond_timeout': 4.0,
@@ -236,6 +280,7 @@ def generate_launch_description():
             {
                 'use_sim_time': use_sim_time,
                 'visualize_lattice': visualize_lattice,
+                'planner_type': planner_type,
             }
         ],
         remappings=[
@@ -245,6 +290,26 @@ def generate_launch_description():
         ]
     )
     
+    # ============================================================================
+    #                            轨迹跟踪控制器
+    # ============================================================================
+    # tracker_node = Node(
+    #     package='trajectory_tracker',
+    #     executable='tracker_node',
+    #     name='tracker_node',
+    #     output='screen',
+    #     parameters=[
+    #         tracker_config,
+    #         {'use_sim_time': use_sim_time, 'controller_type': controller_type},
+    #     ],
+    #     remappings=[
+    #         ('/local_path', '/local_path'),
+    #         ('/odom', '/odom'),
+    #         ('/cmd_vel', '/cmd_vel'),
+    #         ('/steering_angle', '/steering_angle'),
+    #     ]
+    # )
+
     # ============================================================================
     #                            RViz
     # ============================================================================
@@ -265,6 +330,9 @@ def generate_launch_description():
         declare_use_sim_time,
         declare_autostart,
         declare_visualize_lattice,
+        declare_planner_type,
+        declare_use_localization,
+        # declare_controller_type,
         
         # 机器人和 Gazebo
         node_robot_state_publisher,
@@ -281,12 +349,35 @@ def generate_launch_description():
             period=3.0,
             actions=[
                 map_server,
+                amcl_node,
                 global_planner_node,
                 rviz_goal_bridge_node,
                 lifecycle_manager,
             ]
         ),
         
+        # 启用定位时：延迟 5s 后自动发一次 /initialpose（从 /odom 取当前位姿），无需在 RViz 里点
+        GroupAction(
+            condition=IfCondition(use_localization),
+            actions=[
+                TimerAction(
+                    period=5.0,
+                    actions=[
+                        Node(
+                            package='local_planner',
+                            executable='publish_initial_pose.py',
+                            name='publish_initial_pose',
+                            output='screen',
+                            parameters=[
+                                {'use_sim_time': use_sim_time},
+                                {'delay_sec': 2.0},
+                                {'once': True},
+                            ],
+                        ),
+                    ]
+                ),
+            ]
+        ),
         # 局部规划 (延迟启动，等待全局规划器)
         TimerAction(
             period=5.0,
@@ -294,7 +385,11 @@ def generate_launch_description():
                 local_planner_node,
             ]
         ),
-        
+        # 轨迹跟踪控制 (延迟启动，等待局部规划)
+        # TimerAction(
+        #     period=6.0,
+        #     actions=[tracker_node]
+        # ),
         # RViz
         TimerAction(
             period=2.0,

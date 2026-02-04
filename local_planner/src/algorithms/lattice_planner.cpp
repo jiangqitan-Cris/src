@@ -186,8 +186,8 @@ Trajectory LatticePlanner::plan(const State& current_state,
     }
     
     // Step 2 & 3: 生成候选轨迹
-    double target_speed = current_state.v;  // 目标速度
-    candidate_paths_ = generateLateralPaths(current_state, target_speed);
+    // 注：横向轨迹生成不需要 target_speed，纵向速度在 generateLongitudinalPaths 中独立处理
+    candidate_paths_ = generateLateralPaths(current_state, vehicle_params_.max_speed);
     
     // 生成纵向分量（对所有候选轨迹）
     generateLongitudinalPaths(candidate_paths_, current_state);
@@ -224,7 +224,7 @@ Trajectory LatticePlanner::plan(const State& current_state,
     
     // 返回最优轨迹
     if (best_path != nullptr) {
-        std::cout << "[LatticePlanner] Best path found, cost = " << min_cost << std::endl;
+        // std::cout << "[LatticePlanner] Best path found, cost = " << min_cost << std::endl;
         return convertToTrajectory(*best_path);
     } else {
         std::cerr << "[LatticePlanner] No valid path found!" << std::endl;
@@ -321,7 +321,7 @@ void LatticePlanner::generateLongitudinalPaths(std::vector<FrenetPath>& paths,
      * 纵向轨迹生成：
      * 
      * 对于每条横向轨迹，生成对应的纵向运动（速度曲线）。
-     * 使用四次多项式，只约束终点速度，不约束终点位置。
+     * 使用四次多项式，只约束终点速度，不约束终点位置。但是如果要求机器人停止到某个位置的话还是得用五次多项式
      * 
      * 边界条件：
      *   s(0) = current_s

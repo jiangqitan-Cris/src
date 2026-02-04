@@ -14,6 +14,8 @@ GlobalPlannerNode::GlobalPlannerNode(const rclcpp::NodeOptions& options)
     declare_parameter("use_inflation", true);
     declare_parameter("inflation_radius", 0.3);
     declare_parameter("planning_timeout", 5.0);
+    declare_parameter("rrt_step_size", 0.2);
+    declare_parameter("rrt_max_iterations", 5000);
     declare_parameter("global_frame", "map");
     declare_parameter("robot_frame", "base_link");
     
@@ -47,6 +49,8 @@ GlobalPlannerNode::on_configure(const rclcpp_lifecycle::State& /*state*/) {
         planner_config_.use_inflation = get_parameter("use_inflation").as_bool();
         planner_config_.inflation_radius = get_parameter("inflation_radius").as_double();
         planner_config_.planning_timeout = get_parameter("planning_timeout").as_double();
+        planner_config_.rrt_step_size = get_parameter("rrt_step_size").as_double();
+        planner_config_.rrt_max_iterations = get_parameter("rrt_max_iterations").as_int();
         global_frame_ = get_parameter("global_frame").as_string();
         robot_frame_ = get_parameter("robot_frame").as_string();
         

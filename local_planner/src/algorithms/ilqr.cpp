@@ -59,6 +59,10 @@ Trajectory ILQR::optimize(const State& initial_state,
         // 从初始轨迹提取控制序列
         x_.resize(horizon_ + 1);
         u_.resize(horizon_);
+        x_new_.resize(horizon_ + 1);
+        u_new_.resize(horizon_);
+        k_.resize(horizon_);
+        K_.resize(horizon_);
         
         for (int k = 0; k <= horizon_; ++k) {
             size_t idx = std::min(static_cast<size_t>(k), initial_trajectory.points.size() - 1);
@@ -364,32 +368,39 @@ double ILQR::computeTotalCost() {
 
 double ILQR::computeStageCost(const StateVector& x, const ControlVector& u, int k) const {
     /**
-     * 运行代价（二次形式）：
-     *   L = ½(x - x_ref)^T Q (x - x_ref) + ½ u^T R u
-     * 
-     * 如果有参考路径，使用参考路径上的对应点
-     * 否则使用目标状态作为参考
+     * 运行代价：
+     *   L = ½(x - x_ref)^T Q (x - x_ref) + ½ u^T R u + L_obstacle
      */
     
     StateVector x_ref;
     if (!reference_states_.empty() && k < static_cast<int>(reference_states_.size())) {
         x_ref = reference_states_[k];
     } else {
-        // 使用从起点到目标的线性插值
         double progress = static_cast<double>(k) / horizon_;
         x_ref = (1.0 - progress) * x_[0] + progress * goal_state_;
     }
     
     StateVector dx = x - x_ref;
-    
-    // 归一化角度误差
     while (dx(2) > M_PI) dx(2) -= 2.0 * M_PI;
     while (dx(2) < -M_PI) dx(2) += 2.0 * M_PI;
     
     double state_cost = 0.5 * dx.transpose() * Q_ * dx;
     double control_cost = 0.5 * u.transpose() * R_ * u;
     
-    return state_cost + control_cost;
+    // 障碍物排斥代价：距离 < safe_distance 时二次排斥
+    double obstacle_cost = 0.0;
+    for (const auto& obs : obstacles_) {
+        double dx_obs = x(0) - obs.x;
+        double dy_obs = x(1) - obs.y;
+        double d = std::hypot(dx_obs, dy_obs);
+        double margin = config_.safe_distance + obs.radius;
+        if (d < margin && d > 1e-6) {
+            double penetration = margin - d;
+            obstacle_cost += config_.weight_obstacle * penetration * penetration;
+        }
+    }
+    
+    return state_cost + control_cost + obstacle_cost;
 }
 
 double ILQR::computeTerminalCost(const StateVector& x) const {
@@ -412,14 +423,7 @@ void ILQR::computeCostDerivatives(const StateVector& x, const ControlVector& u, 
                                    StateMatrix& Lxx, ControlMatrix& Luu,
                                    StateControlMatrix& Lxu) const {
     /**
-     * 代价函数的一阶和二阶导数
-     * 
-     * 对于二次代价 L = ½(x-xref)^T Q (x-xref) + ½ u^T R u：
-     *   Lx = Q (x - xref)
-     *   Lu = R u
-     *   Lxx = Q
-     *   Luu = R
-     *   Lxu = 0
+     * 代价函数的一阶和二阶导数（含障碍物排斥项的梯度）
      */
     
     StateVector x_ref;
@@ -431,8 +435,6 @@ void ILQR::computeCostDerivatives(const StateVector& x, const ControlVector& u, 
     }
     
     StateVector dx = x - x_ref;
-    
-    // 归一化角度误差
     while (dx(2) > M_PI) dx(2) -= 2.0 * M_PI;
     while (dx(2) < -M_PI) dx(2) += 2.0 * M_PI;
     
@@ -441,6 +443,20 @@ void ILQR::computeCostDerivatives(const StateVector& x, const ControlVector& u, 
     Lxx = Q_;
     Luu = R_;
     Lxu = StateControlMatrix::Zero();
+    
+    // 障碍物排斥代价的梯度：L_obs = w * (margin - d)^2  =>  dL/dx = -2*w*(margin-d)*(x-ox)/d
+    for (const auto& obs : obstacles_) {
+        double dx_obs = x(0) - obs.x;
+        double dy_obs = x(1) - obs.y;
+        double d = std::hypot(dx_obs, dy_obs);
+        double margin = config_.safe_distance + obs.radius;
+        if (d < margin && d > 1e-6) {
+            double penetration = margin - d;
+            double coeff = -2.0 * config_.weight_obstacle * penetration / d;
+            Lx(0) += coeff * dx_obs;
+            Lx(1) += coeff * dy_obs;
+        }
+    }
 }
 
 void ILQR::computeTerminalCostDerivatives(const StateVector& x,

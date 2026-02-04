@@ -22,6 +22,7 @@ LocalPlannerNode::LocalPlannerNode()
     declare_parameter("obstacle_threshold", 50);
     declare_parameter("obstacle_cluster_dist", 0.3);
     declare_parameter("visualize_lattice", true);
+    declare_parameter("planner_type", "ilqr");   // "lattice" 或 "ilqr"
     
     // Lattice 配置参数
     declare_parameter("lattice.num_width_samples", 7);
@@ -40,6 +41,22 @@ LocalPlannerNode::LocalPlannerNode()
     declare_parameter("vehicle.max_steering_angle", 0.5);
     declare_parameter("vehicle.max_curvature", 1.0);
     
+    // iLQR 配置参数
+    declare_parameter("ilqr.max_iterations", 50);
+    declare_parameter("ilqr.tolerance", 1e-4);
+    declare_parameter("ilqr.initial_lambda", 1.0);
+    declare_parameter("ilqr.horizon_time", 3.0);
+    declare_parameter("ilqr.dt", 0.1);
+    declare_parameter("ilqr.weight_x", 1.0);
+    declare_parameter("ilqr.weight_y", 1.0);
+    declare_parameter("ilqr.weight_theta", 0.5);
+    declare_parameter("ilqr.weight_v", 0.1);
+    declare_parameter("ilqr.weight_acceleration", 0.1);
+    declare_parameter("ilqr.weight_steering", 0.1);
+    declare_parameter("ilqr.weight_terminal", 10.0);
+    declare_parameter("ilqr.weight_obstacle", 50.0);
+    declare_parameter("ilqr.safe_distance", 0.5);
+    
     // 获取参数
     global_frame_ = get_parameter("global_frame").as_string();
     robot_frame_ = get_parameter("robot_frame").as_string();
@@ -50,6 +67,16 @@ LocalPlannerNode::LocalPlannerNode()
     obstacle_threshold_ = get_parameter("obstacle_threshold").as_int();
     obstacle_cluster_dist_ = get_parameter("obstacle_cluster_dist").as_double();
     visualize_lattice_ = get_parameter("visualize_lattice").as_bool();
+    planner_type_ = get_parameter("planner_type").as_string();
+    
+    // 归一化 planner_type
+    std::string pt = planner_type_;
+    std::transform(pt.begin(), pt.end(), pt.begin(), ::tolower);
+    if (pt == "lattice") {
+        planner_type_ = "lattice";
+    } else {
+        planner_type_ = "ilqr";
+    }
     
     // Lattice 配置
     lattice_config_.num_width_samples = get_parameter("lattice.num_width_samples").as_int();
@@ -68,8 +95,30 @@ LocalPlannerNode::LocalPlannerNode()
     vehicle_params_.max_steering_angle = get_parameter("vehicle.max_steering_angle").as_double();
     vehicle_params_.max_curvature = get_parameter("vehicle.max_curvature").as_double();
     
+    // iLQR 配置
+    ilqr_config_.max_iterations = get_parameter("ilqr.max_iterations").as_int();
+    ilqr_config_.tolerance = get_parameter("ilqr.tolerance").as_double();
+    ilqr_config_.initial_lambda = get_parameter("ilqr.initial_lambda").as_double();
+    ilqr_config_.horizon_time = get_parameter("ilqr.horizon_time").as_double();
+    ilqr_config_.dt = get_parameter("ilqr.dt").as_double();
+    ilqr_config_.weight_x = get_parameter("ilqr.weight_x").as_double();
+    ilqr_config_.weight_y = get_parameter("ilqr.weight_y").as_double();
+    ilqr_config_.weight_theta = get_parameter("ilqr.weight_theta").as_double();
+    ilqr_config_.weight_v = get_parameter("ilqr.weight_v").as_double();
+    ilqr_config_.weight_acceleration = get_parameter("ilqr.weight_acceleration").as_double();
+    ilqr_config_.weight_steering = get_parameter("ilqr.weight_steering").as_double();
+    ilqr_config_.weight_terminal = get_parameter("ilqr.weight_terminal").as_double();
+    ilqr_config_.weight_obstacle = get_parameter("ilqr.weight_obstacle").as_double();
+    ilqr_config_.safe_distance = get_parameter("ilqr.safe_distance").as_double();
+    
     // 创建规划器
-    planner_ = std::make_unique<LatticePlanner>(lattice_config_, vehicle_params_);
+    if (planner_type_ == "lattice") {
+        lattice_planner_ = std::make_unique<LatticePlanner>(lattice_config_, vehicle_params_);
+        RCLCPP_INFO(get_logger(), "Using Lattice Planner");
+    } else {
+        ilqr_planner_ = std::make_unique<ILQR>(ilqr_config_, vehicle_params_);
+        RCLCPP_INFO(get_logger(), "Using iLQR Planner");
+    }
     
     // TF
     tf_buffer_ = std::make_shared<tf2_ros::Buffer>(get_clock());
@@ -92,7 +141,6 @@ LocalPlannerNode::LocalPlannerNode()
     
     // 发布者
     local_path_pub_ = create_publisher<nav_msgs::msg::Path>("/local_path", 10);
-    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
     viz_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/local_planner_viz", 10);
     lattice_viz_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>("/lattice_candidates", 10);
     
@@ -159,11 +207,23 @@ void LocalPlannerNode::planningTimerCallback() {
         return;
     }
     
-    // 执行规划
-    auto start_time = std::chrono::high_resolution_clock::now();
-    Trajectory trajectory = planner_->plan(current_state, reference_path, obstacles);
-    auto end_time = std::chrono::high_resolution_clock::now();
+    State goal_state = reference_path.back();
     
+    auto start_time = std::chrono::high_resolution_clock::now();
+    Trajectory trajectory;
+    
+    if (planner_type_ == "lattice") {
+        trajectory = lattice_planner_->plan(current_state, reference_path, obstacles);
+    } else {
+        // iLQR: 用参考路径作为初始轨迹猜测
+        Trajectory initial_traj = referencePathToInitialTrajectory(
+            reference_path, current_state, goal_state);
+        ilqr_planner_->setReferencePath(reference_path);
+        trajectory = ilqr_planner_->optimize(
+            current_state, goal_state, initial_traj, obstacles);
+    }
+    
+    auto end_time = std::chrono::high_resolution_clock::now();
     double planning_time_ms = std::chrono::duration<double, std::milli>(
         end_time - start_time).count();
     
@@ -171,22 +231,18 @@ void LocalPlannerNode::planningTimerCallback() {
         RCLCPP_DEBUG(get_logger(), "Planning succeeded in %.2f ms, %zu points",
                      planning_time_ms, trajectory.points.size());
         
-        // 发布轨迹
         publishTrajectory(trajectory);
-        
-        // 发布可视化
         publishVisualization(trajectory, obstacles);
         
-        // 发布 Lattice 候选轨迹可视化
-        if (visualize_lattice_) {
+        // 仅 Lattice 时发布候选轨迹可视化
+        if (planner_type_ == "lattice" && visualize_lattice_) {
             publishLatticeVisualization();
         }
     } else {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
                              "Planning failed");
         
-        // 即使规划失败也可视化候选轨迹（用于调试）
-        if (visualize_lattice_) {
+        if (planner_type_ == "lattice" && visualize_lattice_) {
             publishLatticeVisualization();
         }
     }
@@ -468,8 +524,66 @@ void LocalPlannerNode::publishVisualization(const Trajectory& traj,
     viz_pub_->publish(markers);
 }
 
+Trajectory LocalPlannerNode::referencePathToInitialTrajectory(
+    const std::vector<State>& reference_path,
+    const State& current_state,
+    const State& goal_state) {
+    
+    Trajectory traj;
+    if (reference_path.size() < 2) return traj;
+    
+    // 按 iLQR 时域采样参考路径
+    double horizon_time = ilqr_config_.horizon_time;
+    double dt = ilqr_config_.dt;
+    int N = static_cast<int>(horizon_time / dt);
+    
+    double total_len = 0.0;
+    for (size_t i = 1; i < reference_path.size(); ++i) {
+        total_len += reference_path[i].distanceTo(reference_path[i - 1]);
+    }
+    if (total_len < 1e-6) return traj;
+    
+    traj.points.reserve(N + 1);
+    
+    for (int k = 0; k <= N; ++k) {
+        double t = k * dt;
+        if (t > horizon_time) break;
+        
+        TrajectoryPoint pt;
+        pt.state.t = t;
+        pt.control.acceleration = 0.0;
+        pt.control.steering_angle = 0.0;
+        
+        if (k == 0) {
+            pt.state = current_state;
+            pt.state.t = t;
+        } else {
+            double s = (t / horizon_time) * total_len;
+            double acc = 0.0;
+            for (size_t i = 1; i < reference_path.size(); ++i) {
+                double seg = reference_path[i].distanceTo(reference_path[i - 1]);
+                if (acc + seg >= s || i == reference_path.size() - 1) {
+                    double alpha = (seg > 1e-6) ? std::clamp((s - acc) / seg, 0.0, 1.0) : 0.0;
+                    pt.state.x = reference_path[i - 1].x + alpha * (reference_path[i].x - reference_path[i - 1].x);
+                    pt.state.y = reference_path[i - 1].y + alpha * (reference_path[i].y - reference_path[i - 1].y);
+                    pt.state.theta = reference_path[i - 1].theta + alpha * (reference_path[i].theta - reference_path[i - 1].theta);
+                    pt.state.v = vehicle_params_.max_speed * 0.5;
+                    pt.state.a = 0.0;
+                    break;
+                }
+                acc += seg;
+            }
+        }
+        traj.points.push_back(pt);
+    }
+    
+    traj.is_valid = !traj.points.empty();
+    return traj;
+}
+
 void LocalPlannerNode::publishLatticeVisualization() {
-    const auto& candidate_paths = planner_->getCandidatePaths();
+    if (!lattice_planner_) return;
+    const auto& candidate_paths = lattice_planner_->getCandidatePaths();
     
     if (candidate_paths.empty()) {
         return;

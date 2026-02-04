@@ -79,6 +79,10 @@ install(TARGETS local_planner_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS scripts/publish_initial_pose.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY include/
   DESTINATION include/
 )

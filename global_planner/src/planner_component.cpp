@@ -1,5 +1,6 @@
 #include "planner_component.hpp"
 #include "algorithms/astar.hpp"
+#include "algorithms/rrt_connect.hpp"
 #include <iostream>
 #include <algorithm>
 
@@ -13,7 +14,7 @@ std::unique_ptr<BaseAlgorithm> PlannerComponent::create(PlannerType type) {
 
         case PlannerType::RRTCONNECT:
             std::cout << "[PlannerComponent] Creating RRTConnect Algorithm..." << std::endl;
-            return nullptr; // 暂时还没实现
+            return std::make_unique<RRTConnect>();
 
         case PlannerType::DIJKSTRA:
             std::cout << "[PlannerComponent] Creating Dijkstra Algorithm..." << std::endl;
@@ -39,7 +40,7 @@ PlannerType PlannerComponent::stringToType(const std::string& type_str) {
 void PlannerComponent::printSupportList() const {
     std::cout << "Supported planners:" << std::endl;
     std::cout << "  - ASTAR" << std::endl;
-    std::cout << "  - RRTCONNECT (not implemented)" << std::endl;
+    std::cout << "  - RRTCONNECT" << std::endl;
     std::cout << "  - DIJKSTRA (not implemented)" << std::endl;
 }
 

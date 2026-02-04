@@ -69,6 +69,9 @@ struct PlannerConfig {
     bool use_inflation = true;
     double inflation_radius = 0.3;
     double planning_timeout = 5.0;  // 规划超时时间 (s)
+    // RRT Connect 专用
+    double rrt_step_size = 0.2;      // 扩展步长 (m)
+    int rrt_max_iterations = 5000;   // 最大采样/扩展次数
 };
 
 /**

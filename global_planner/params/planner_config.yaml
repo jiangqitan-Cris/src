@@ -1,10 +1,12 @@
 global_planner_node:
   ros__parameters:
     # 规划器配置
-    planner_type: "ASTAR"           # 规划算法: ASTAR, DIJKSTRA, RRTCONNECT
+    planner_type: "ASTAR"      # 规划算法: ASTAR, RRTCONNECT, DIJKSTRA
     use_inflation: true             # 是否使用地图膨胀
     inflation_radius: 0.30          # 膨胀半径 (m)
     planning_timeout: 5.0           # 规划超时时间 (s)
+    rrt_step_size: 0.2              # RRT 扩展步长 (m)
+    rrt_max_iterations: 5000        # RRT 最大迭代次数
     
     # TF 配置
     global_frame: "map"             # 全局坐标系

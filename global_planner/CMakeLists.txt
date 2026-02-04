@@ -38,6 +38,7 @@ include_directories(
 # 4. 编译可执行文件
 add_executable(global_planner_node
   src/algorithms/astar.cpp
+  src/algorithms/rrt_connect.cpp
   src/planner_component.cpp
   src/smoother/smoother.cpp
   src/planner_node.cpp

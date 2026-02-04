@@ -1,0 +1,38 @@
+# Trajectory Tracker 配置（兼容 LQR / Pure Pursuit / MPC 等）
+
+tracker_node:
+  ros__parameters:
+    map_frame: "map"
+    robot_frame: "base_footprint"
+    control_frequency: 50.0    # 控制频率 (Hz)
+    # 速度方向：1.0=正常，-1.0=若车往反方向走则改为 -1.0
+    velocity_scale: 1.0
+
+    # 控制器类型: "lqr" | "pure_pursuit" | "mpc"
+    controller_type: "lqr"
+
+    # 车辆参数（各算法共用）
+    vehicle:
+      wheelbase: 0.32
+      max_steering_angle: 0.5236   # rad ≈ 30°
+      max_speed: 1.0
+      min_speed: 0.0
+
+    # LQR 专用
+    lqr:
+      lookahead_distance: 2.0
+      q_lateral: 1.0
+      q_heading: 1.0
+      r_steering: 0.1
+
+    # Pure Pursuit 专用
+    pure_pursuit:
+      lookahead_distance: 2.0
+      lookahead_gain: 0.5
+      use_adaptive_lookahead: false
+      default_speed: 0.5
+
+    # MPC 专用（占位，后续可扩展）
+    mpc:
+      lookahead_distance: 2.0
+      default_speed: 0.5
