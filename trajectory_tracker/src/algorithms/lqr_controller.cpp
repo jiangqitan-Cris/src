@@ -135,45 +135,41 @@ bool LQRController::computeControl(const nav_msgs::msg::Path& path,
     }
 
     // 检测是否需要倒车
-    // 方法：检查轨迹的整体移动方向与机器人朝向的关系
-    // 使用静态变量实现状态保持和滞后，避免模式抖动
-    static bool in_reverse_mode = false;
-    static int reverse_hold_counter = 0;  // 倒车模式保持计数器
+    // 简化逻辑：直接基于轨迹的瞬时方向判断，信任规划器
+    // 规划器已经有了滞后逻辑，控制器不需要额外的复杂滞后
+    bool need_reverse = false;
     
-    bool detected_reverse = false;
     if (path.poses.size() >= 3) {
-        // 计算轨迹的整体移动方向（从第一个点到较远的点）
-        size_t far_idx = std::min(size_t(10), path.poses.size() - 1);
-        double traj_dx = path.poses[far_idx].pose.position.x - path.poses[0].pose.position.x;
-        double traj_dy = path.poses[far_idx].pose.position.y - path.poses[0].pose.position.y;
+        // 计算轨迹开始几个点的累积前进投影
+        double cumulative_projection = 0.0;
+        int valid_segments = 0;
         
-        // 计算轨迹方向相对于机器人朝向的投影
-        double forward_projection = traj_dx * std::cos(state.theta) + traj_dy * std::sin(state.theta);
-        double traj_length = std::hypot(traj_dx, traj_dy);
+        for (size_t i = 1; i < std::min(size_t(8), path.poses.size()); ++i) {
+            double dx = path.poses[i].pose.position.x - path.poses[i-1].pose.position.x;
+            double dy = path.poses[i].pose.position.y - path.poses[i-1].pose.position.y;
+            double seg_len = std::hypot(dx, dy);
+            
+            if (seg_len > 0.01) {
+                // 计算这一段相对于机器人朝向的投影
+                double proj = dx * std::cos(state.theta) + dy * std::sin(state.theta);
+                cumulative_projection += proj;
+                valid_segments++;
+            }
+        }
         
-        // 如果轨迹方向与机器人朝向相反（投影为负且长度足够）
-        if (traj_length > 0.2 && forward_projection < -traj_length * 0.5) {
-            detected_reverse = true;
+        // 如果累积投影明显为负，则是倒车轨迹
+        if (valid_segments > 0 && cumulative_projection < -0.05) {
+            need_reverse = true;
         }
     }
     
-    // 滞后逻辑：避免模式频繁切换
-    if (detected_reverse && !in_reverse_mode) {
-        // 进入倒车模式
-        in_reverse_mode = true;
-        reverse_hold_counter = 30;  // 至少保持 30 个控制周期
-        RCLCPP_INFO(rclcpp::get_logger("lqr_controller"), "Entering REVERSE mode");
-    } else if (in_reverse_mode) {
-        if (reverse_hold_counter > 0) {
-            reverse_hold_counter--;
-        } else if (!detected_reverse) {
-            // 退出倒车模式的条件更严格：必须明确检测到非倒车
-            in_reverse_mode = false;
-            RCLCPP_INFO(rclcpp::get_logger("lqr_controller"), "Exiting REVERSE mode");
-        }
+    // 简单的状态变化日志
+    static bool last_reverse = false;
+    if (need_reverse != last_reverse) {
+        RCLCPP_INFO(rclcpp::get_logger("lqr_controller"), 
+                    "Mode: %s", need_reverse ? "REVERSE" : "FORWARD");
+        last_reverse = need_reverse;
     }
-    
-    bool need_reverse = in_reverse_mode;
 
     double e_y = (state.x - ref.x) * (-std::sin(ref.theta)) + (state.y - ref.y) * std::cos(ref.theta);
     double e_theta = state.theta - ref.theta;

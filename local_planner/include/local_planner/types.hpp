@@ -200,6 +200,166 @@ struct VehicleParams {
 };
 
 /**
+ * @brief 底盘模型类型枚举
+ */
+enum class ChassisModelType {
+    ACKERMANN = 0,   // 阿克曼底盘（自行车模型）
+    DIFFERENTIAL = 1, // 差速底盘（两轮差速）
+    OMNIWHEEL = 2    // 全向轮底盘
+};
+
+/**
+ * @brief 抽象底盘模型基类
+ * 
+ * 定义不同底盘模型的统一接口，用于规划时根据底盘类型
+ * 选择合适的机动策略（如倒车、原地掉头等）。
+ */
+class ChassisModel {
+public:
+    /**
+     * @brief 构造函数
+     * @param params 车辆参数
+     */
+    explicit ChassisModel(const VehicleParams& params) : params_(params) {}
+    
+    /**
+     * @brief 虚析构函数
+     */
+    virtual ~ChassisModel() = default;
+    
+    /**
+     * @brief 判断是否需要特殊机动
+     * @param current_state 当前状态
+     * @param target_state 目标状态
+     * @return true 如果当前底盘类型需要特殊机动（如倒车、原地掉头）
+     */
+    virtual bool needsSpecialManeuver(const State& current_state, 
+                                       const State& target_state) const = 0;
+    
+    /**
+     * @brief 生成特殊机动轨迹
+     * @param current_state 当前状态
+     * @param target_state 目标状态
+     * @param obstacles 障碍物列表
+     * @return 机动轨迹（倒车、原地掉头等）
+     */
+    virtual Trajectory generateManeuverTrajectory(
+        const State& current_state,
+        const State& target_state,
+        const std::vector<Obstacle>& obstacles) const = 0;
+    
+    /**
+     * @brief 获取底盘类型名称
+     * @return 字符串形式的类型名称
+     */
+    virtual std::string getTypeName() const = 0;
+    
+    /**
+     * @brief 获取车辆参数
+     */
+    const VehicleParams& getParams() const { return params_; }
+
+protected:
+    VehicleParams params_;
+};
+
+/**
+ * @brief 阿克曼底盘模型
+ * 
+ * 阿克曼底盘（自行车模型）的特点：
+ * - 无法原地旋转，需要空间转弯
+ * - 航向差异过大时，需要倒车调整方向
+ * - 使用自行车运动学模型
+ * - 倒车方向锁定机制：一旦决定倒车方向，保持稳定直到完成
+ */
+class AckermannModel : public ChassisModel {
+public:
+    explicit AckermannModel(const VehicleParams& params) : ChassisModel(params) {}
+    
+    bool needsSpecialManeuver(const State& current_state, 
+                               const State& target_state) const override;
+    
+    Trajectory generateManeuverTrajectory(
+        const State& current_state,
+        const State& target_state,
+        const std::vector<Obstacle>& obstacles) const override;
+    
+    std::string getTypeName() const override { return "Ackermann"; }
+    
+    /**
+     * @brief 重置倒车状态（当倒车完成或需要重新开始时调用）
+     */
+    static void resetReverseState();
+
+private:
+    // ========== 静态变量用于倒车方向锁定 ==========
+    static bool s_in_reverse_mode_;           // 是否正在倒车模式中
+    static int s_locked_steering_direction_;  // 锁定的转向方向: 1=左转(正), -1=右转(负), 0=未锁定
+    static double s_initial_heading_diff_;    // 进入倒车模式时的初始航向差
+    static int s_reverse_hold_counter_;       // 模式保持计数器
+};
+
+/**
+ * @brief 差速底盘模型
+ * 
+ * 差速底盘的特点：
+ * - 左右轮速度独立控制
+ * - 可以原地旋转（旋转中心在车辆中心）
+ * - 航向差异过大时，原地掉头比倒车更高效
+ */
+class DifferentialModel : public ChassisModel {
+public:
+    explicit DifferentialModel(const VehicleParams& params) : ChassisModel(params) {}
+    
+    bool needsSpecialManeuver(const State& current_state, 
+                               const State& target_state) const override;
+    
+    Trajectory generateManeuverTrajectory(
+        const State& current_state,
+        const State& target_state,
+        const std::vector<Obstacle>& obstacles) const override;
+    
+    std::string getTypeName() const override { return "Differential"; }
+};
+
+/**
+ * @brief 全向轮底盘模型
+ * 
+ * 全向轮底盘的特点：
+ * - 可以向任意方向移动
+ * - 可以原地旋转
+ * - 无需特殊机动策略，直接朝向目标即可
+ */
+class OmniWheelModel : public ChassisModel {
+public:
+    explicit OmniWheelModel(const VehicleParams& params) : ChassisModel(params) {}
+    
+    bool needsSpecialManeuver(const State& current_state, 
+                               const State& target_state) const override;
+    
+    Trajectory generateManeuverTrajectory(
+        const State& current_state,
+        const State& target_state,
+        const std::vector<Obstacle>& obstacles) const override;
+    
+    std::string getTypeName() const override { return "OmniWheel"; }
+};
+
+/**
+ * @brief 从字符串解析底盘模型类型
+ * @param str 字符串（如 "ackermann", "differential", "omniwheel"）
+ * @return 对应的 ChassisModelType 枚举值
+ */
+ChassisModelType parseChassisModelType(const std::string& str);
+
+/**
+ * @brief 底盘模型类型转字符串
+ * @param type 枚举类型
+ * @return 字符串表示
+ */
+std::string chassisModelTypeToString(ChassisModelType type);
+
+/**
  * @brief Lattice Planner 配置参数
  */
 struct LatticeConfig {
@@ -212,15 +372,16 @@ struct LatticeConfig {
     double time_resolution = 0.1;     // 时间分辨率 (s)
     
     // 代价权重
-    double weight_lateral_offset = 1.0;     // 横向偏移代价权重
+    double weight_lateral_offset = 5.0;     // 横向偏移代价权重（越大越沿全局路径走）
     double weight_lateral_velocity = 1.0;   // 横向速度代价权重
     double weight_longitudinal_jerk = 1.0;  // 纵向 jerk 代价权重
     double weight_lateral_jerk = 1.0;       // 横向 jerk 代价权重
     double weight_time = 1.0;               // 时间代价权重
     double weight_obstacle = 10.0;          // 障碍物代价权重
+    double weight_deviation = 10.0;         // 偏离参考路径的惩罚权重
     
     // 安全参数
-    double safe_distance = 0.5;       // 安全距离 (m)
+    double safe_distance = 0.2;       // 障碍物安全距离/膨胀半径 (m)
 };
 
 /**

@@ -16,6 +16,7 @@ LocalPlannerNode::LocalPlannerNode()
     // 声明参数
     declare_parameter("global_frame", "map");
     declare_parameter("robot_frame", "base_link");
+    declare_parameter("chassis_model_type", "ackermann");  // 底盘模型类型
     declare_parameter("planning_frequency", 10.0);
     declare_parameter("local_range", 5.0);
     declare_parameter("lookahead_distance", 3.0);
@@ -33,7 +34,9 @@ LocalPlannerNode::LocalPlannerNode()
     declare_parameter("lattice.min_planning_time", 2.0);
     declare_parameter("lattice.max_planning_time", 4.0);
     declare_parameter("lattice.time_resolution", 0.1);
-    declare_parameter("lattice.safe_distance", 0.3);
+    declare_parameter("lattice.safe_distance", 0.2);          // 障碍物膨胀半径
+    declare_parameter("lattice.weight_lateral_offset", 5.0);  // 横向偏移代价权重
+    declare_parameter("lattice.weight_deviation", 10.0);      // 偏离参考路径惩罚
     
     // 车辆参数
     declare_parameter("vehicle.wheelbase", 0.5);
@@ -62,6 +65,19 @@ LocalPlannerNode::LocalPlannerNode()
     // 获取参数
     global_frame_ = get_parameter("global_frame").as_string();
     robot_frame_ = get_parameter("robot_frame").as_string();
+    
+    // 获取底盘模型类型
+    std::string chassis_type_str = get_parameter("chassis_model_type").as_string();
+    std::transform(chassis_type_str.begin(), chassis_type_str.end(), chassis_type_str.begin(), ::tolower);
+    ChassisModelType chassis_type = ChassisModelType::ACKERMANN;  // 默认
+    if (chassis_type_str == "differential") {
+        chassis_type = ChassisModelType::DIFFERENTIAL;
+    } else if (chassis_type_str == "omniwheel") {
+        chassis_type = ChassisModelType::OMNIWHEEL;
+    } else {
+        chassis_type = ChassisModelType::ACKERMANN;
+    }
+    
     planning_frequency_ = get_parameter("planning_frequency").as_double();
     local_range_ = get_parameter("local_range").as_double();
     lookahead_distance_ = get_parameter("lookahead_distance").as_double();
@@ -89,6 +105,8 @@ LocalPlannerNode::LocalPlannerNode()
     lattice_config_.max_planning_time = get_parameter("lattice.max_planning_time").as_double();
     lattice_config_.time_resolution = get_parameter("lattice.time_resolution").as_double();
     lattice_config_.safe_distance = get_parameter("lattice.safe_distance").as_double();
+    lattice_config_.weight_lateral_offset = get_parameter("lattice.weight_lateral_offset").as_double();
+    lattice_config_.weight_deviation = get_parameter("lattice.weight_deviation").as_double();
     
     // 车辆参数
     vehicle_params_.wheelbase = get_parameter("vehicle.wheelbase").as_double();
@@ -116,8 +134,8 @@ LocalPlannerNode::LocalPlannerNode()
     
     // 创建规划器
     if (planner_type_ == "lattice") {
-        lattice_planner_ = std::make_unique<LatticePlanner>(lattice_config_, vehicle_params_);
-        RCLCPP_INFO(get_logger(), "Using Lattice Planner");
+        lattice_planner_ = std::make_unique<LatticePlanner>(lattice_config_, vehicle_params_, chassis_type);
+        RCLCPP_INFO(get_logger(), "Using Lattice Planner with %s chassis", chassis_type_str.c_str());
     } else {
         ilqr_planner_ = std::make_unique<ILQR>(ilqr_config_, vehicle_params_);
         RCLCPP_INFO(get_logger(), "Using iLQR Planner");
@@ -242,6 +260,13 @@ void LocalPlannerNode::planningTimerCallback() {
     // 提取局部障碍物
     auto obstacles = extractLocalObstacles(current_state.x, current_state.y, local_range_);
     
+    // 调试：定期输出障碍物数量
+    // static int obs_debug_counter = 0;
+    // if (++obs_debug_counter % 50 == 0) {
+    //     RCLCPP_INFO(get_logger(), "Detected %zu obstacles in local range %.1fm", 
+    //                 obstacles.size(), local_range_);
+    // }
+    
     // 获取局部参考路径
     auto reference_path = getLocalReferencePath(current_state, lookahead_distance_);
     if (reference_path.size() < 2) {
@@ -341,8 +366,10 @@ void LocalPlannerNode::planningTimerCallback() {
             publishLatticeVisualization();
         }
     } else {
+        // 打印更详细的规划失败原因
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
-                             "Planning failed");
+                             "Planning failed: traj_points=%zu, obstacles=%zu, ref_path=%zu",
+                             trajectory.points.size(), obstacles.size(), reference_path.size());
         
         if (planner_type_ == "lattice" && visualize_lattice_) {
             publishLatticeVisualization();
@@ -397,8 +424,13 @@ std::vector<Obstacle> LocalPlannerNode::extractLocalObstacles(
         }
     }
     
-    // 简单聚类：将相邻的障碍物点合并
+    // 改进的聚类：将相邻的障碍物点合并，但对于大型簇（如墙壁）使用多个小圆覆盖
     std::vector<bool> visited(obstacle_points.size(), false);
+    
+    // 定义小圆的最大覆盖半径（用于分割大型簇）
+    const double max_single_obstacle_radius = obstacle_radius_ * 3.0;  // 单个障碍物圆的最大半径
+    const size_t max_cluster_size_for_single_circle = 15;  // 超过此点数的簇需要分割
+    const double sub_grid_size = obstacle_radius_ * 2.0;  // 子网格大小，用于分割大型簇
     
     for (size_t i = 0; i < obstacle_points.size(); ++i) {
         if (visited[i]) continue;
@@ -427,21 +459,82 @@ std::vector<Obstacle> LocalPlannerNode::extractLocalObstacles(
             }
         }
         
-        // 计算聚类中心
-        double sum_x = 0.0, sum_y = 0.0;
-        for (size_t idx : cluster) {
-            sum_x += obstacle_points[idx].first;
-            sum_y += obstacle_points[idx].second;
+        // 根据簇的大小决定如何生成障碍物
+        if (cluster.size() <= max_cluster_size_for_single_circle) {
+            // 小簇：使用单个圆表示
+            double sum_x = 0.0, sum_y = 0.0;
+            for (size_t idx : cluster) {
+                sum_x += obstacle_points[idx].first;
+                sum_y += obstacle_points[idx].second;
+            }
+            
+            Obstacle obs;
+            obs.x = sum_x / cluster.size();
+            obs.y = sum_y / cluster.size();
+            // 限制最大半径
+            obs.radius = std::min(obstacle_radius_ + std::sqrt(cluster.size()) * resolution * 0.5,
+                                  max_single_obstacle_radius);
+            obs.is_static = true;
+            obs.id = static_cast<int>(obstacles.size());
+            
+            obstacles.push_back(obs);
+        } else {
+            // 大簇（如墙壁）：使用子网格分割，生成多个小圆覆盖
+            // 找到簇的边界框
+            double min_x = std::numeric_limits<double>::max();
+            double max_x = std::numeric_limits<double>::lowest();
+            double min_y = std::numeric_limits<double>::max();
+            double max_y = std::numeric_limits<double>::lowest();
+            
+            for (size_t idx : cluster) {
+                min_x = std::min(min_x, obstacle_points[idx].first);
+                max_x = std::max(max_x, obstacle_points[idx].first);
+                min_y = std::min(min_y, obstacle_points[idx].second);
+                max_y = std::max(max_y, obstacle_points[idx].second);
+            }
+            
+            // 计算子网格数量
+            int grid_nx = std::max(1, static_cast<int>(std::ceil((max_x - min_x) / sub_grid_size)));
+            int grid_ny = std::max(1, static_cast<int>(std::ceil((max_y - min_y) / sub_grid_size)));
+            
+            // 为每个子网格收集点
+            std::vector<std::vector<size_t>> sub_grids(grid_nx * grid_ny);
+            
+            for (size_t idx : cluster) {
+                double px = obstacle_points[idx].first;
+                double py = obstacle_points[idx].second;
+                
+                int gx = std::min(grid_nx - 1, static_cast<int>((px - min_x) / sub_grid_size));
+                int gy = std::min(grid_ny - 1, static_cast<int>((py - min_y) / sub_grid_size));
+                
+                sub_grids[gy * grid_nx + gx].push_back(idx);
+            }
+            
+            // 为每个非空子网格生成一个小圆
+            for (int gy = 0; gy < grid_ny; ++gy) {
+                for (int gx = 0; gx < grid_nx; ++gx) {
+                    const auto& sub_cluster = sub_grids[gy * grid_nx + gx];
+                    if (sub_cluster.empty()) continue;
+                    
+                    // 计算子网格中心
+                    double sum_x = 0.0, sum_y = 0.0;
+                    for (size_t idx : sub_cluster) {
+                        sum_x += obstacle_points[idx].first;
+                        sum_y += obstacle_points[idx].second;
+                    }
+                    
+                    Obstacle obs;
+                    obs.x = sum_x / sub_cluster.size();
+                    obs.y = sum_y / sub_cluster.size();
+                    // 子网格的障碍物半径固定为较小值
+                    obs.radius = obstacle_radius_ + sub_grid_size * 0.5;
+                    obs.is_static = true;
+                    obs.id = static_cast<int>(obstacles.size());
+                    
+                    obstacles.push_back(obs);
+                }
+            }
         }
-        
-        Obstacle obs;
-        obs.x = sum_x / cluster.size();
-        obs.y = sum_y / cluster.size();
-        obs.radius = obstacle_radius_ + std::sqrt(cluster.size()) * resolution * 0.5;
-        obs.is_static = true;
-        obs.id = static_cast<int>(obstacles.size());
-        
-        obstacles.push_back(obs);
     }
     
     RCLCPP_DEBUG(get_logger(), "Extracted %zu obstacles from %zu points",

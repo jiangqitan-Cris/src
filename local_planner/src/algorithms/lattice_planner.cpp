@@ -5,6 +5,55 @@
 
 namespace local_planner {
 
+// 静态变量初始化
+bool LatticePlanner::g_in_reverse_mode = false;
+int LatticePlanner::g_reverse_hold_counter = 0;
+
+// ============================================================================
+//                          构造函数和析构函数
+// ============================================================================
+
+LatticePlanner::LatticePlanner(const LatticeConfig& config, const VehicleParams& vehicle_params)
+    : config_(config), vehicle_params_(vehicle_params),
+      vehicle_model_(std::make_unique<BicycleModel>(vehicle_params)),
+      chassis_type_(ChassisModelType::ACKERMANN) {
+    // 默认使用阿克曼底盘
+    chassis_model_ = std::make_unique<AckermannModel>(vehicle_params);
+}
+
+LatticePlanner::LatticePlanner(const LatticeConfig& config, const VehicleParams& vehicle_params, 
+                               ChassisModelType chassis_type)
+    : config_(config), vehicle_params_(vehicle_params),
+      vehicle_model_(std::make_unique<BicycleModel>(vehicle_params)),
+      chassis_type_(chassis_type) {
+    // 根据类型创建对应的底盘模型
+    setChassisModel(chassis_type);
+}
+
+LatticePlanner::~LatticePlanner() = default;
+
+void LatticePlanner::setChassisModel(ChassisModelType type) {
+    chassis_type_ = type;
+    
+    switch (type) {
+        case ChassisModelType::ACKERMANN:
+            chassis_model_ = std::make_unique<AckermannModel>(vehicle_params_);
+            break;
+        case ChassisModelType::DIFFERENTIAL:
+            chassis_model_ = std::make_unique<DifferentialModel>(vehicle_params_);
+            break;
+        case ChassisModelType::OMNIWHEEL:
+            chassis_model_ = std::make_unique<OmniWheelModel>(vehicle_params_);
+            break;
+        default:
+            chassis_model_ = std::make_unique<AckermannModel>(vehicle_params_);
+            break;
+    }
+    
+    std::cout << "[LatticePlanner] Chassis model set to: " << chassis_model_->getTypeName() << std::endl;
+}
+
+
 // ============================================================================
 //                          五次多项式实现
 // ============================================================================
@@ -152,11 +201,6 @@ double QuarticPolynomial::calcJerk(double t) const {
 //                          Lattice Planner 实现
 // ============================================================================
 
-LatticePlanner::LatticePlanner(const LatticeConfig& config, const VehicleParams& vehicle_params)
-    : config_(config), vehicle_params_(vehicle_params) {
-    vehicle_model_ = std::make_unique<BicycleModel>(vehicle_params_);
-}
-
 Trajectory LatticePlanner::plan(const State& current_state,
                                  const std::vector<State>& reference_path,
                                  const std::vector<Obstacle>& obstacles,
@@ -165,7 +209,7 @@ Trajectory LatticePlanner::plan(const State& current_state,
     /**
      * Lattice Planner 主流程：
      * 
-     * Step 0: 检查是否需要倒车调整（航向差异过大）
+     * Step 0: 检查是否需要特殊机动（根据底盘模型类型决定）
      * Step 1: 缓存参考路径并计算累积弧长
      * Step 2: 生成横向轨迹候选集（不同的 d_target 和 T）
      * Step 3: 生成纵向轨迹候选集（不同的速度曲线）
@@ -174,25 +218,27 @@ Trajectory LatticePlanner::plan(const State& current_state,
      * Step 6: 计算代价并选择最优轨迹
      */
     
-    // Step 0: 检查是否需要倒车调整（阿克曼模型无法原地掉头）
-    if (needsReverseManeuver(current_state, reference_path)) {
-        std::cout << "[LatticePlanner] Large heading difference detected, generating reverse trajectory" << std::endl;
-        return generateReverseTrajectory(current_state, reference_path, obstacles);
+    // Step 0: 检查是否需要特殊机动（倒车、原地掉头等）
+    // 根据底盘模型类型自动选择合适的机动策略
+    if (chassis_model_ && !reference_path.empty()) {
+        State target_state = reference_path.empty() ? current_state : reference_path.back();
+        if (chassis_model_->needsSpecialManeuver(current_state, target_state)) {
+            // 特殊机动（如倒车）由底盘模型处理，打印信息已在 needsSpecialManeuver 中输出
+            return chassis_model_->generateManeuverTrajectory(current_state, target_state, obstacles);
+        }
     }
     
-    // 调试：打印当前状态和参考路径方向
-    static int debug_print_count = 0;
-    if (++debug_print_count % 20 == 0 && reference_path.size() > 1) {
-        double ref_dx = reference_path[1].x - reference_path[0].x;
-        double ref_dy = reference_path[1].y - reference_path[0].y;
-        double ref_direction = std::atan2(ref_dy, ref_dx);
-        double heading_diff = current_state.theta - ref_direction;
-        while (heading_diff > M_PI) heading_diff -= 2.0 * M_PI;
-        while (heading_diff < -M_PI) heading_diff += 2.0 * M_PI;
-        std::cout << "[LatticePlanner] Robot heading: " << current_state.theta * 180.0 / M_PI 
-                  << " deg, Ref direction: " << ref_direction * 180.0 / M_PI 
-                  << " deg, Diff: " << heading_diff * 180.0 / M_PI << " deg" << std::endl;
-    }
+    // 调试：打印当前状态和参考路径方向（低频率输出，每100个周期一次）
+    // static int debug_print_count = 0;
+    // if (++debug_print_count % 100 == 0 && reference_path.size() > 1) {
+    //     double ref_dx = reference_path[1].x - reference_path[0].x;
+    //     double ref_dy = reference_path[1].y - reference_path[0].y;
+    //     double ref_direction = std::atan2(ref_dy, ref_dx);
+    //     double heading_diff = current_state.theta - ref_direction;
+    //     while (heading_diff > M_PI) heading_diff -= 2.0 * M_PI;
+    //     while (heading_diff < -M_PI) heading_diff += 2.0 * M_PI;
+    //     std::cout << "[LatticePlanner] Heading diff: " << heading_diff * 180.0 / M_PI << " deg" << std::endl;
+    // }
     
     // Step 1: 缓存参考路径
     reference_path_ = reference_path;
@@ -329,15 +375,23 @@ std::vector<FrenetPath> LatticePlanner::generateLateralPaths(const State& curren
     double current_d_dot = current_state.v * std::sin(heading_error);
     double current_d_ddot = 0.0;  // 简化为 0
     
-    // 停止模式下：只生成收敛到 d=0 的轨迹
+    // 停止模式下：仍然采样一定范围的横向偏移，以应对障碍物情况
     // 普通模式下：采样多个横向偏移（但在 d=0 附近增加更多采样以促进回归）
     std::vector<double> d_targets;
     if (stop_at_end) {
-        // 停止模式：只生成 d_target = 0 的轨迹
+        // 停止模式：在较窄的范围内采样，但比之前更宽以应对障碍物
+        // 使用最大横向偏移的一半作为终点模式的采样范围
+        double stop_mode_lateral_range = config_.max_lateral_offset * 0.5;
+        double stop_d_step = stop_mode_lateral_range / 3.0;  // 分成6个采样点
+        
+        // 在 [-stop_mode_lateral_range, +stop_mode_lateral_range] 范围内采样
+        for (double d = -stop_mode_lateral_range; d <= stop_mode_lateral_range + 0.01; d += stop_d_step) {
+            d_targets.push_back(d);
+        }
+        // 确保 d=0 在采样点中
         d_targets.push_back(0.0);
-        // 也可以添加一些小的偏移以增加鲁棒性，但主要目标是 0
-        d_targets.push_back(-0.1);
-        d_targets.push_back(0.1);
+        d_targets.push_back(-0.05);
+        d_targets.push_back(0.05);
     } else {
         // 普通模式：采样多个横向偏移
         // 在 d=0 附近增加更多采样点，促进轨迹回归到参考路径
@@ -633,7 +687,19 @@ bool LatticePlanner::checkCollision(const FrenetPath& path,
      *   则认为发生碰撞
      */
     
-    for (size_t i = 0; i < path.x.size(); ++i) {
+    // 如果没有障碍物，直接返回无碰撞
+    if (obstacles.empty()) {
+        return false;
+    }
+    
+    // 调试：统计碰撞信息
+    static int collision_debug_count = 0;
+    bool print_debug = (collision_debug_count++ % 100 == 0);
+    
+    // 只检查轨迹的部分点（每隔几个点检查一次，提高效率）
+    size_t step = std::max(size_t(1), path.x.size() / 20);  // 最多检查20个点
+    
+    for (size_t i = 0; i < path.x.size(); i += step) {
         double t = path.t[i];
         
         for (const auto& obs : obstacles) {
@@ -641,9 +707,16 @@ bool LatticePlanner::checkCollision(const FrenetPath& path,
             Obstacle pred_obs = obs.predictAt(t);
             
             double dist = std::hypot(path.x[i] - pred_obs.x, path.y[i] - pred_obs.y);
-            double safe_dist = config_.safe_distance + pred_obs.radius;
+            // 使用更小的安全距离进行碰撞检测，避免过于保守
+            double safe_dist = config_.safe_distance * 0.8 + pred_obs.radius;
             
             if (dist < safe_dist) {
+                if (print_debug) {
+                    std::cerr << "[Collision] at path point " << i 
+                              << " (x=" << path.x[i] << ", y=" << path.y[i] << ")"
+                              << " with obstacle at (" << pred_obs.x << ", " << pred_obs.y << ")"
+                              << ", dist=" << dist << ", safe_dist=" << safe_dist << std::endl;
+                }
                 return true;  // 碰撞
             }
         }
@@ -673,19 +746,20 @@ void LatticePlanner::calculateCost(FrenetPath& path) const {
     
     // 路径跟踪代价：惩罚轨迹偏离参考路径（d != 0）的程度
     // 这会让轨迹更倾向于回到全局路径上
+    // 使用配置的权重参数
     double reference_deviation_cost = 0.0;
-    double weight_deviation = 5.0;  // 偏离惩罚权重（增大以强制回归）
     
     for (size_t i = 0; i < path.d.size(); ++i) {
         // 对整条轨迹的横向偏移进行积分惩罚
         reference_deviation_cost += path.d[i] * path.d[i];
     }
-    reference_deviation_cost *= config_.time_resolution * weight_deviation;
+    reference_deviation_cost *= config_.time_resolution * config_.weight_deviation;
     
     // 终点横向偏移额外惩罚（确保轨迹终点回到参考路径）
+    // 使用配置的 weight_lateral_offset 作为终点惩罚的基准
     if (!path.d.empty()) {
         double end_d = path.d.back();
-        reference_deviation_cost += 15.0 * end_d * end_d;  // 终点偏移额外权重（增大）
+        reference_deviation_cost += config_.weight_lateral_offset * 3.0 * end_d * end_d;
     }
     
     // 如果起点就偏离参考路径，给予回归到 d=0 的轨迹额外奖励
@@ -695,7 +769,7 @@ void LatticePlanner::calculateCost(FrenetPath& path) const {
         double end_d = path.d.back();
         // 如果起点偏离，但终点也偏离（没有回归），额外惩罚
         if (std::abs(start_d) > 0.1 && std::abs(end_d) > std::abs(start_d) * 0.5) {
-            reference_deviation_cost += 10.0 * end_d * end_d;
+            reference_deviation_cost += config_.weight_lateral_offset * 2.0 * end_d * end_d;
         }
     }
     
@@ -801,246 +875,6 @@ void LatticePlanner::frenetToCartesian(double s, double d, double& x, double& y,
     x = x_ref - d * std::sin(theta_ref);
     y = y_ref + d * std::cos(theta_ref);
     theta = theta_ref;  // 简化处理
-}
-
-// 静态变量：倒车模式状态和锁定的转向方向
-static bool g_in_reverse_mode = false;
-static int g_reverse_hold_counter = 0;
-static double g_locked_steering_sign = 0.0;  // 锁定的转向方向：正=左转，负=右转
-
-bool LatticePlanner::needsReverseManeuver(const State& current_state,
-                                           const std::vector<State>& reference_path) const {
-    /**
-     * 检测是否需要倒车调整
-     * 
-     * 对于阿克曼模型，当航向差异超过一定阈值时，
-     * 正常的前进轨迹无法满足曲率约束，需要先倒车调整方向。
-     * 
-     * 使用滞后逻辑避免模式抖动，并锁定转向方向。
-     * 
-     * @return true 如果航向差异过大，需要倒车
-     */
-    
-    if (reference_path.empty()) {
-        g_in_reverse_mode = false;
-        g_locked_steering_sign = 0.0;
-        return false;
-    }
-    
-    // 找到参考路径上最近的点
-    size_t nearest_idx = 0;
-    double min_dist = std::numeric_limits<double>::max();
-    for (size_t i = 0; i < reference_path.size(); ++i) {
-        double dist = std::hypot(reference_path[i].x - current_state.x,
-                                  reference_path[i].y - current_state.y);
-        if (dist < min_dist) {
-            min_dist = dist;
-            nearest_idx = i;
-        }
-    }
-    
-    // 计算参考路径在最近点的方向
-    double ref_theta;
-    if (nearest_idx + 1 < reference_path.size()) {
-        // 使用下一个点计算方向
-        double dx = reference_path[nearest_idx + 1].x - reference_path[nearest_idx].x;
-        double dy = reference_path[nearest_idx + 1].y - reference_path[nearest_idx].y;
-        ref_theta = std::atan2(dy, dx);
-    } else if (nearest_idx > 0) {
-        // 使用前一个点计算方向
-        double dx = reference_path[nearest_idx].x - reference_path[nearest_idx - 1].x;
-        double dy = reference_path[nearest_idx].y - reference_path[nearest_idx - 1].y;
-        ref_theta = std::atan2(dy, dx);
-    } else {
-        ref_theta = reference_path[nearest_idx].theta;
-    }
-    
-    // 计算航向差异：target_theta - current_theta
-    // 正值表示需要向左转（逆时针），负值表示需要向右转（顺时针）
-    double heading_diff = ref_theta - current_state.theta;
-    while (heading_diff > M_PI) heading_diff -= 2.0 * M_PI;
-    while (heading_diff < -M_PI) heading_diff += 2.0 * M_PI;
-    
-    // 进入倒车模式的阈值（75度）和退出倒车模式的阈值（45度）
-    double enter_threshold = M_PI * 75.0 / 180.0;  // 75 degrees
-    double exit_threshold = M_PI * 45.0 / 180.0;   // 45 degrees
-    
-    bool detected_reverse = std::abs(heading_diff) > enter_threshold;
-    bool still_needs_reverse = std::abs(heading_diff) > exit_threshold;
-    
-    // 滞后逻辑
-    if (detected_reverse && !g_in_reverse_mode) {
-        // 进入倒车模式，锁定转向方向
-        g_in_reverse_mode = true;
-        g_reverse_hold_counter = 30;  // 至少保持 30 个规划周期
-        // 锁定转向方向：heading_diff > 0 表示需要向左转
-        g_locked_steering_sign = (heading_diff > 0) ? 1.0 : -1.0;
-        std::cout << "[LatticePlanner] Entering REVERSE mode, heading_diff=" 
-                  << heading_diff * 180.0 / M_PI << " deg, locked_steering=" 
-                  << (g_locked_steering_sign > 0 ? "LEFT" : "RIGHT") << std::endl;
-    } else if (g_in_reverse_mode) {
-        if (g_reverse_hold_counter > 0) {
-            g_reverse_hold_counter--;
-        } else if (!still_needs_reverse) {
-            // 退出倒车模式
-            g_in_reverse_mode = false;
-            g_locked_steering_sign = 0.0;
-            std::cout << "[LatticePlanner] Exiting REVERSE mode, heading_diff=" 
-                      << heading_diff * 180.0 / M_PI << " deg" << std::endl;
-        }
-    }
-    
-    // 调试输出
-    static int reverse_debug_count = 0;
-    if (++reverse_debug_count % 20 == 0) {
-        std::cout << "[needsReverseManeuver] heading_diff=" << heading_diff * 180.0 / M_PI 
-                  << " deg, in_reverse_mode=" << (g_in_reverse_mode ? "YES" : "NO") 
-                  << ", locked_steering=" << (g_locked_steering_sign > 0 ? "LEFT" : (g_locked_steering_sign < 0 ? "RIGHT" : "NONE"))
-                  << std::endl;
-    }
-    
-    return g_in_reverse_mode;
-}
-
-Trajectory LatticePlanner::generateReverseTrajectory(const State& current_state,
-                                                      const std::vector<State>& reference_path,
-                                                      const std::vector<Obstacle>& obstacles) {
-    /**
-     * 生成倒车调整轨迹
-     * 
-     * 对于阿克曼模型，当航向差异过大时，需要先倒车一段距离，
-     * 同时转向，使车辆方向逐渐接近参考路径方向。
-     * 
-     * 使用在 needsReverseManeuver 中锁定的转向方向，避免方向抖动。
-     */
-    
-    Trajectory traj;
-    
-    if (reference_path.empty()) return traj;
-    
-    // 计算目标航向（参考路径方向）- 仅用于计算倒车时间
-    double target_theta;
-    if (reference_path.size() > 1) {
-        double dx = reference_path[1].x - reference_path[0].x;
-        double dy = reference_path[1].y - reference_path[0].y;
-        target_theta = std::atan2(dy, dx);
-    } else {
-        target_theta = reference_path[0].theta;
-    }
-    
-    // 计算航向差异（仅用于估算倒车时间）
-    double heading_diff = target_theta - current_state.theta;
-    while (heading_diff > M_PI) heading_diff -= 2.0 * M_PI;
-    while (heading_diff < -M_PI) heading_diff += 2.0 * M_PI;
-    
-    // 倒车参数
-    double reverse_speed = vehicle_params_.min_speed;  // 负值，表示倒车
-    if (reverse_speed >= 0) reverse_speed = -0.3;      // 确保是负值
-    
-    // 使用锁定的转向方向，而不是每次重新计算
-    // g_locked_steering_sign > 0 表示需要向左转（车头向左）
-    // 
-    // 自行车模型: theta_dot = v * tan(delta) / L
-    // 倒车时 v < 0，要让 theta 增加（车头向左），需要 theta_dot > 0
-    // 因此需要 v * tan(delta) > 0
-    // 因为 v < 0，所以需要 tan(delta) < 0，即 delta < 0（前轮向右）
-    //
-    // 总结：
-    // - 需要车头向左（theta增加）→ 倒车时用负转向角（前轮向右）
-    // - 需要车头向右（theta减少）→ 倒车时用正转向角（前轮向左）
-    double steering_angle;
-    if (g_locked_steering_sign > 0) {
-        // 需要车头向左转 -> 倒车时前轮向右（负转向角）
-        steering_angle = vehicle_params_.max_steering_angle * 0.8;
-    } else {
-        // 需要车头向右转 -> 倒车时前轮向左（正转向角）
-        steering_angle = -vehicle_params_.max_steering_angle * 0.8;
-    }
-    
-    // 计算倒车所需的时间（基于需要调整的角度）
-    // 简化计算：假设以最大转向角倒车时的角速度
-    double wheelbase = vehicle_params_.wheelbase;
-    double angular_rate = std::abs(reverse_speed * std::tan(steering_angle) / wheelbase);
-    double required_time = std::abs(heading_diff) / angular_rate;
-    required_time = std::clamp(required_time, 1.5, 5.0);  // 限制在 1.5-5 秒
-    
-    // 生成轨迹点
-    double dt = 0.1;
-    int N = static_cast<int>(required_time / dt);
-    
-    State state = current_state;
-    
-    for (int k = 0; k <= N; ++k) {
-        double t = k * dt;
-        
-        TrajectoryPoint pt;
-        pt.state = state;
-        pt.state.t = t;
-        pt.control.acceleration = 0.0;
-        pt.control.steering_angle = steering_angle;
-        
-        traj.points.push_back(pt);
-        
-        // 使用自行车模型更新状态
-        if (k < N) {
-            double v = reverse_speed;
-            double delta = steering_angle;
-            
-            // 自行车模型运动学
-            state.x += v * std::cos(state.theta) * dt;
-            state.y += v * std::sin(state.theta) * dt;
-            state.theta += v * std::tan(delta) / wheelbase * dt;
-            state.v = v;
-            
-            // 归一化角度
-            while (state.theta > M_PI) state.theta -= 2.0 * M_PI;
-            while (state.theta < -M_PI) state.theta += 2.0 * M_PI;
-        }
-    }
-    
-    // 碰撞检测
-    bool has_collision = false;
-    for (const auto& pt : traj.points) {
-        for (const auto& obs : obstacles) {
-            double dist = std::hypot(pt.state.x - obs.x, pt.state.y - obs.y);
-            if (dist < config_.safe_distance + obs.radius) {
-                has_collision = true;
-                break;
-            }
-        }
-        if (has_collision) break;
-    }
-    
-    if (has_collision) {
-        std::cerr << "[LatticePlanner] Reverse trajectory has collision, trying shorter path" << std::endl;
-        // 尝试更短的倒车距离
-        while (traj.points.size() > 5 && has_collision) {
-            traj.points.pop_back();
-            has_collision = false;
-            for (const auto& pt : traj.points) {
-                for (const auto& obs : obstacles) {
-                    double dist = std::hypot(pt.state.x - obs.x, pt.state.y - obs.y);
-                    if (dist < config_.safe_distance + obs.radius) {
-                        has_collision = true;
-                        break;
-                    }
-                }
-                if (has_collision) break;
-            }
-        }
-    }
-    
-    traj.is_valid = !traj.points.empty() && !has_collision;
-    traj.total_time = traj.points.empty() ? 0.0 : traj.points.back().state.t;
-    traj.total_length = traj.getLength();
-    
-    if (traj.is_valid) {
-        std::cout << "[LatticePlanner] Generated reverse trajectory: " 
-                  << traj.points.size() << " points, "
-                  << traj.total_time << "s" << std::endl;
-    }
-    
-    return traj;
 }
 
 } // namespace local_planner

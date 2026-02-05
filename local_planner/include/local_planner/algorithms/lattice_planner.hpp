@@ -196,11 +196,25 @@ struct FrenetPath {
 class LatticePlanner {
 public:
     /**
-     * @brief 构造函数
+     * @brief 构造函数（使用默认阿克曼底盘）
      * @param config 配置参数
      * @param vehicle_params 车辆参数
      */
     LatticePlanner(const LatticeConfig& config, const VehicleParams& vehicle_params);
+    
+    /**
+     * @brief 构造函数（指定底盘模型类型）
+     * @param config 配置参数
+     * @param vehicle_params 车辆参数
+     * @param chassis_type 底盘模型类型
+     */
+    LatticePlanner(const LatticeConfig& config, const VehicleParams& vehicle_params, 
+                   ChassisModelType chassis_type);
+    
+    /**
+     * @brief 析构函数
+     */
+    ~LatticePlanner();
     
     /**
      * @brief 规划轨迹
@@ -218,25 +232,16 @@ public:
                     double target_end_s = -1.0);
     
     /**
-     * @brief 检查是否需要倒车调整（航向差异过大）
-     * @param current_state 当前状态
-     * @param reference_path 参考路径
-     * @return 如果航向差异超过阈值（如90°），返回 true
+     * @brief 设置底盘模型类型
+     * @param type 底盘模型类型
      */
-    bool needsReverseManeuver(const State& current_state, 
-                               const std::vector<State>& reference_path) const;
+    void setChassisModel(ChassisModelType type);
     
     /**
-     * @brief 生成倒车调整轨迹
-     * 当机器人航向与路径方向差异过大时，生成倒车轨迹进行调整
-     * @param current_state 当前状态
-     * @param reference_path 参考路径
-     * @param obstacles 障碍物
-     * @return 倒车调整轨迹
+     * @brief 获取当前底盘模型类型
+     * @return 底盘模型类型
      */
-    Trajectory generateReverseTrajectory(const State& current_state,
-                                          const std::vector<State>& reference_path,
-                                          const std::vector<Obstacle>& obstacles);
+    ChassisModelType getChassisModelType() const { return chassis_type_; }
     
     /**
      * @brief 获取所有候选轨迹（用于可视化）
@@ -317,12 +322,22 @@ private:
     LatticeConfig config_;
     VehicleParams vehicle_params_;
     std::unique_ptr<BicycleModel> vehicle_model_;
+    std::unique_ptr<ChassisModel> chassis_model_;  // 底盘模型指针（用于机动决策）
+    ChassisModelType chassis_type_;  // 当前底盘模型类型
     
     std::vector<State> reference_path_;  // 缓存的参考路径
     std::vector<double> reference_s_;    // 参考路径的累积弧长
     
     std::vector<FrenetPath> candidate_paths_;  // 候选轨迹集合
+    
+    // ========== 静态变量 ==========
+    static bool g_in_reverse_mode;  // 是否处于倒车/机动模式
+    static int g_reverse_hold_counter;  // 模式保持计数器
 };
+
+// 静态变量在 cpp 中定义
+// bool LatticePlanner::g_in_reverse_mode = false;
+// int LatticePlanner::g_reverse_hold_counter = 0;
 
 } // namespace local_planner
 
