@@ -10,19 +10,21 @@ namespace local_planner {
 
 LocalPlannerNode::LocalPlannerNode() 
     : Node("local_planner_node"),
-      has_map_(false), has_path_(false), has_odom_(false), visualize_lattice_(true) {
+      has_map_(false), has_path_(false), has_odom_(false), visualize_lattice_(true),
+      goal_reached_(false) {
     
     // 声明参数
     declare_parameter("global_frame", "map");
     declare_parameter("robot_frame", "base_link");
     declare_parameter("planning_frequency", 10.0);
     declare_parameter("local_range", 5.0);
-    declare_parameter("lookahead_distance", 10.0);
+    declare_parameter("lookahead_distance", 3.0);
     declare_parameter("obstacle_radius", 0.15);
     declare_parameter("obstacle_threshold", 50);
     declare_parameter("obstacle_cluster_dist", 0.3);
     declare_parameter("visualize_lattice", true);
     declare_parameter("planner_type", "ilqr");   // "lattice" 或 "ilqr"
+    declare_parameter("goal_tolerance", 0.3);
     
     // Lattice 配置参数
     declare_parameter("lattice.num_width_samples", 7);
@@ -68,6 +70,7 @@ LocalPlannerNode::LocalPlannerNode()
     obstacle_cluster_dist_ = get_parameter("obstacle_cluster_dist").as_double();
     visualize_lattice_ = get_parameter("visualize_lattice").as_bool();
     planner_type_ = get_parameter("planner_type").as_string();
+    goal_tolerance_ = get_parameter("goal_tolerance").as_double();
     
     // 归一化 planner_type
     std::string pt = planner_type_;
@@ -154,6 +157,7 @@ LocalPlannerNode::LocalPlannerNode()
     RCLCPP_INFO(get_logger(), "  Planning frequency: %.1f Hz", planning_frequency_);
     RCLCPP_INFO(get_logger(), "  Local range: %.1f m", local_range_);
     RCLCPP_INFO(get_logger(), "  Lookahead distance: %.1f m", lookahead_distance_);
+    RCLCPP_INFO(get_logger(), "  Goal tolerance: %.1f m", goal_tolerance_);
 }
 
 void LocalPlannerNode::mapCallback(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
@@ -168,7 +172,16 @@ void LocalPlannerNode::globalPathCallback(const nav_msgs::msg::Path::SharedPtr m
     std::lock_guard<std::mutex> lock(path_mutex_);
     global_path_ = msg;
     has_path_ = true;
-    RCLCPP_INFO(get_logger(), "Received global path with %zu points", msg->poses.size());
+    
+    // 保存全局终点
+    if (msg && !msg->poses.empty()) {
+        global_goal_ = msg->poses.back();
+        goal_reached_ = false;  // 收到新路径时重置目标到达状态
+        RCLCPP_INFO(get_logger(), "Received global path with %zu points, goal: (%.2f, %.2f)", 
+                    msg->poses.size(),
+                    global_goal_.pose.position.x,
+                    global_goal_.pose.position.y);
+    }
 }
 
 void LocalPlannerNode::odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -196,6 +209,36 @@ void LocalPlannerNode::planningTimerCallback() {
         return;
     }
     
+    // 检查是否已经到达全局终点
+    double dist_to_global_goal = std::hypot(
+        current_state.x - global_goal_.pose.position.x,
+        current_state.y - global_goal_.pose.position.y);
+    
+    if (dist_to_global_goal <= goal_tolerance_) {
+        if (!goal_reached_) {
+            goal_reached_ = true;
+            RCLCPP_INFO(get_logger(), "Goal reached! Distance: %.3f m (tolerance: %.3f m)",
+                        dist_to_global_goal, goal_tolerance_);
+        }
+        // 到达目标后，发布一个只包含当前位置的路径（让控制器停止）
+        nav_msgs::msg::Path stop_path;
+        stop_path.header.stamp = now();
+        stop_path.header.frame_id = global_frame_;
+        geometry_msgs::msg::PoseStamped current_pose;
+        current_pose.header = stop_path.header;
+        current_pose.pose.position.x = current_state.x;
+        current_pose.pose.position.y = current_state.y;
+        tf2::Quaternion q;
+        q.setRPY(0, 0, current_state.theta);
+        current_pose.pose.orientation = tf2::toMsg(q);
+        stop_path.poses.push_back(current_pose);
+        local_path_pub_->publish(stop_path);
+        return;
+    }
+    
+    // 重置目标到达状态（如果之前到达过但现在不在范围内）
+    goal_reached_ = false;
+    
     // 提取局部障碍物
     auto obstacles = extractLocalObstacles(current_state.x, current_state.y, local_range_);
     
@@ -207,18 +250,77 @@ void LocalPlannerNode::planningTimerCallback() {
         return;
     }
     
+    // 当接近终点时，确保局部路径终点是全局终点
+    // 这样可以让轨迹规划器正确地规划到终点
+    if (dist_to_global_goal < lookahead_distance_) {
+        State global_goal_state;
+        global_goal_state.x = global_goal_.pose.position.x;
+        global_goal_state.y = global_goal_.pose.position.y;
+        tf2::Quaternion q;
+        tf2::fromMsg(global_goal_.pose.orientation, q);
+        double roll, pitch, yaw;
+        tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+        global_goal_state.theta = yaw;
+        global_goal_state.v = 0.0;  // 终点速度为0
+        global_goal_state.a = 0.0;
+        
+        // 确保参考路径以全局终点结束
+        if (!reference_path.empty()) {
+            double last_dist = std::hypot(
+                reference_path.back().x - global_goal_state.x,
+                reference_path.back().y - global_goal_state.y);
+            if (last_dist > 0.1) {
+                reference_path.push_back(global_goal_state);
+            } else {
+                reference_path.back() = global_goal_state;
+            }
+        }
+    }
+    
     State goal_state = reference_path.back();
+    
+    // 判断是否接近终点（需要停止模式）
+    // 计算减速停止所需的距离：v²/(2*a) + buffer
+    double stopping_distance = (current_state.v * current_state.v) / 
+                               (2.0 * vehicle_params_.max_deceleration) + 1.0;
+    // 只有当距离小于 减速距离+2米 时才进入停止模式，而不是用 lookahead_distance（太大了）
+    double approach_threshold = std::max(stopping_distance + 2.0, 3.0);  // 至少 3 米
+    bool approaching_goal = (dist_to_global_goal < approach_threshold);
+    
+    // 当非常接近终点时，直接生成收敛到终点的简单轨迹
+    // 这样可以避免 Frenet 坐标转换的误差，并确保精确停在终点
+    double very_close_threshold = std::max(goal_tolerance_ * 5.0, 1.5);  // 至少 1.5m
+    bool very_close_to_goal = (dist_to_global_goal < very_close_threshold);
     
     auto start_time = std::chrono::high_resolution_clock::now();
     Trajectory trajectory;
     
-    if (planner_type_ == "lattice") {
-        trajectory = lattice_planner_->plan(current_state, reference_path, obstacles);
+    if (very_close_to_goal) {
+        // 非常接近终点时，直接生成简单的减速停止轨迹
+        trajectory = generateFinalApproachTrajectory(current_state, global_goal_, dist_to_global_goal);
+        RCLCPP_DEBUG(get_logger(), "Using final approach trajectory, dist: %.3f m", dist_to_global_goal);
+    } else if (planner_type_ == "lattice") {
+        // Lattice Planner：传递停止模式参数
+        trajectory = lattice_planner_->plan(current_state, reference_path, obstacles, 
+                                            approaching_goal, -1.0);
     } else {
         // iLQR: 用参考路径作为初始轨迹猜测
         Trajectory initial_traj = referencePathToInitialTrajectory(
             reference_path, current_state, goal_state);
-        ilqr_planner_->setReferencePath(reference_path);
+        
+        // Use the time-sampled initial trajectory states as the reference for the cost function
+        // This ensures the cost function targets correspond to the solver's time steps
+        std::vector<State> time_sampled_ref;
+        if (initial_traj.is_valid) {
+            for (const auto& pt : initial_traj.points) {
+                time_sampled_ref.push_back(pt.state);
+            }
+        } else {
+             // Fallback if initial traj generation failed
+            time_sampled_ref = reference_path; 
+        }
+
+        ilqr_planner_->setReferencePath(time_sampled_ref);
         trajectory = ilqr_planner_->optimize(
             current_state, goal_state, initial_traj, obstacles);
     }
@@ -228,8 +330,8 @@ void LocalPlannerNode::planningTimerCallback() {
         end_time - start_time).count();
     
     if (trajectory.is_valid) {
-        RCLCPP_DEBUG(get_logger(), "Planning succeeded in %.2f ms, %zu points",
-                     planning_time_ms, trajectory.points.size());
+        RCLCPP_DEBUG(get_logger(), "Planning succeeded in %.2f ms, %zu points, dist_to_goal: %.2f m",
+                     planning_time_ms, trajectory.points.size(), dist_to_global_goal);
         
         publishTrajectory(trajectory);
         publishVisualization(trajectory, obstacles);
@@ -543,11 +645,37 @@ Trajectory LocalPlannerNode::referencePathToInitialTrajectory(
     }
     if (total_len < 1e-6) return traj;
     
+    // 计算到全局终点的距离
+    double dist_to_goal = std::hypot(
+        current_state.x - global_goal_.pose.position.x,
+        current_state.y - global_goal_.pose.position.y);
+    
+    // 判断是否需要减速停止
+    // 使用减速公式：v² = v0² + 2*a*d => 需要的减速距离 d = v0²/(2*a)
+    double stopping_distance = (current_state.v * current_state.v) / 
+                               (2.0 * vehicle_params_.max_deceleration);
+    bool need_to_stop = (dist_to_goal < std::max(stopping_distance + 1.0, lookahead_distance_));
+    
+    // 如果需要停止，计算实际需要的时间
+    double actual_horizon_time = horizon_time;
+    if (need_to_stop && dist_to_goal < total_len) {
+        // 使用梯形速度曲线估算停止时间
+        // 假设匀速减速到0：t = v / a + d / v
+        double avg_speed = (current_state.v + 0.0) / 2.0;
+        if (avg_speed > 0.1) {
+            actual_horizon_time = std::max(1.5, dist_to_goal / avg_speed);
+        } else {
+            actual_horizon_time = std::max(1.5, std::sqrt(2.0 * dist_to_goal / vehicle_params_.max_deceleration));
+        }
+        // 限制最大时间
+        actual_horizon_time = std::min(actual_horizon_time, horizon_time);
+    }
+    
     traj.points.reserve(N + 1);
     
     for (int k = 0; k <= N; ++k) {
         double t = k * dt;
-        if (t > horizon_time) break;
+        if (t > actual_horizon_time) break;
         
         TrajectoryPoint pt;
         pt.state.t = t;
@@ -558,7 +686,10 @@ Trajectory LocalPlannerNode::referencePathToInitialTrajectory(
             pt.state = current_state;
             pt.state.t = t;
         } else {
-            double s = (t / horizon_time) * total_len;
+            // 计算沿路径的进度
+            double progress = t / actual_horizon_time;
+            double s = progress * std::min(total_len, dist_to_goal);
+            
             double acc = 0.0;
             for (size_t i = 1; i < reference_path.size(); ++i) {
                 double seg = reference_path[i].distanceTo(reference_path[i - 1]);
@@ -567,8 +698,20 @@ Trajectory LocalPlannerNode::referencePathToInitialTrajectory(
                     pt.state.x = reference_path[i - 1].x + alpha * (reference_path[i].x - reference_path[i - 1].x);
                     pt.state.y = reference_path[i - 1].y + alpha * (reference_path[i].y - reference_path[i - 1].y);
                     pt.state.theta = reference_path[i - 1].theta + alpha * (reference_path[i].theta - reference_path[i - 1].theta);
-                    pt.state.v = vehicle_params_.max_speed * 0.5;
-                    pt.state.a = 0.0;
+                    
+                    // 根据是否需要停止来设置速度
+                    if (need_to_stop) {
+                        // 使用梯形减速曲线：从当前速度线性减速到0
+                        // v(t) = v0 * (1 - t/T) 其中 T 是总时间
+                        pt.state.v = current_state.v * (1.0 - progress);
+                        // 加速度（减速）
+                        pt.state.a = -current_state.v / actual_horizon_time;
+                        pt.control.acceleration = pt.state.a;
+                    } else {
+                        // 普通模式：使用巡航速度
+                        pt.state.v = vehicle_params_.max_speed * 0.5;
+                        pt.state.a = 0.0;
+                    }
                     break;
                 }
                 acc += seg;
@@ -577,7 +720,123 @@ Trajectory LocalPlannerNode::referencePathToInitialTrajectory(
         traj.points.push_back(pt);
     }
     
+    // 如果需要停止，确保最后一个点的速度和加速度为0
+    if (need_to_stop && !traj.points.empty()) {
+        traj.points.back().state.v = 0.0;
+        traj.points.back().state.a = 0.0;
+        traj.points.back().control.acceleration = 0.0;
+    }
+    
     traj.is_valid = !traj.points.empty();
+    return traj;
+}
+
+Trajectory LocalPlannerNode::generateFinalApproachTrajectory(
+    const State& current_state,
+    const geometry_msgs::msg::PoseStamped& goal_pose,
+    double dist_to_goal) {
+    /**
+     * 生成最终接近轨迹
+     * 
+     * 当机器人非常接近终点时，直接在笛卡尔坐标系中生成一条
+     * 从当前位置到终点的简单减速轨迹。
+     * 
+     * 使用线性插值位置 + 线性减速速度曲线
+     */
+    
+    Trajectory traj;
+    
+    // 获取终点位姿
+    double goal_x = goal_pose.pose.position.x;
+    double goal_y = goal_pose.pose.position.y;
+    tf2::Quaternion q;
+    tf2::fromMsg(goal_pose.pose.orientation, q);
+    double roll, pitch, goal_theta;
+    tf2::Matrix3x3(q).getRPY(roll, pitch, goal_theta);
+    
+    // 计算到达终点所需的时间
+    // 使用梯形减速：从当前速度线性减速到0
+    double current_v = std::max(current_state.v, 0.1);  // 至少保持 0.1 m/s
+    double decel = std::min(vehicle_params_.max_deceleration * 0.5, current_v * current_v / (2.0 * dist_to_goal + 0.01));
+    
+    // 计算停止时间 t = v/a，但要确保能到达终点
+    double stop_time;
+    if (decel > 0.01) {
+        stop_time = current_v / decel;
+    } else {
+        stop_time = dist_to_goal / (current_v * 0.5);
+    }
+    stop_time = std::max(0.5, std::min(stop_time, 5.0));  // 限制在 0.5-5 秒
+    
+    // 采样轨迹点
+    double dt = 0.1;
+    int N = static_cast<int>(stop_time / dt) + 1;
+    
+    for (int k = 0; k <= N; ++k) {
+        double t = k * dt;
+        double progress = std::min(t / stop_time, 1.0);
+        
+        // 使用平滑的 S 曲线进行插值（cubic easing）
+        // progress' = 3*p^2 - 2*p^3 提供更平滑的加减速
+        double smooth_progress = progress * progress * (3.0 - 2.0 * progress);
+        
+        TrajectoryPoint pt;
+        pt.state.t = t;
+        
+        // 位置：从当前位置到终点的线性插值
+        pt.state.x = current_state.x + smooth_progress * (goal_x - current_state.x);
+        pt.state.y = current_state.y + smooth_progress * (goal_y - current_state.y);
+        
+        // 航向角：插值到终点航向
+        double dtheta = goal_theta - current_state.theta;
+        while (dtheta > M_PI) dtheta -= 2.0 * M_PI;
+        while (dtheta < -M_PI) dtheta += 2.0 * M_PI;
+        pt.state.theta = current_state.theta + smooth_progress * dtheta;
+        
+        // 速度：线性减速到 0
+        pt.state.v = current_v * (1.0 - progress);
+        
+        // 加速度（减速）
+        pt.state.a = -current_v / stop_time;
+        
+        // 控制输入
+        pt.control.acceleration = pt.state.a;
+        
+        // 计算转向角（基于曲率）
+        if (k > 0 && pt.state.v > 0.01) {
+            double dx = pt.state.x - traj.points.back().state.x;
+            double dy = pt.state.y - traj.points.back().state.y;
+            double ds = std::hypot(dx, dy);
+            if (ds > 0.001) {
+                double dtheta_seg = pt.state.theta - traj.points.back().state.theta;
+                while (dtheta_seg > M_PI) dtheta_seg -= 2.0 * M_PI;
+                while (dtheta_seg < -M_PI) dtheta_seg += 2.0 * M_PI;
+                double kappa = dtheta_seg / ds;
+                pt.control.steering_angle = std::atan(kappa * vehicle_params_.wheelbase);
+                pt.control.steering_angle = std::clamp(pt.control.steering_angle, 
+                                                        -vehicle_params_.max_steering_angle,
+                                                        vehicle_params_.max_steering_angle);
+            }
+        }
+        
+        traj.points.push_back(pt);
+    }
+    
+    // 确保最后一个点精确在终点
+    if (!traj.points.empty()) {
+        traj.points.back().state.x = goal_x;
+        traj.points.back().state.y = goal_y;
+        traj.points.back().state.theta = goal_theta;
+        traj.points.back().state.v = 0.0;
+        traj.points.back().state.a = 0.0;
+        traj.points.back().control.acceleration = 0.0;
+        traj.points.back().control.steering_angle = 0.0;
+    }
+    
+    traj.is_valid = !traj.points.empty();
+    traj.total_time = stop_time;
+    traj.total_length = dist_to_goal;
+    
     return traj;
 }
 

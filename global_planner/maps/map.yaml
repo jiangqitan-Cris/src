@@ -1,4 +1,4 @@
-image: /home/nvidia/learning_part/motion_planning/src/a_star/map/map.pgm
+image: map.pgm
 resolution: 0.01
 origin: [-1, -1, 0.000000]
 negate: 0

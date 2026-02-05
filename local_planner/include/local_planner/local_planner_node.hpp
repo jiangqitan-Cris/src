@@ -108,6 +108,21 @@ private:
     Trajectory referencePathToInitialTrajectory(const std::vector<State>& reference_path,
                                                 const State& current_state,
                                                 const State& goal_state);
+    
+    /**
+     * @brief 生成最终接近轨迹（当非常接近终点时使用）
+     * 
+     * 当机器人非常接近全局终点时，直接在笛卡尔坐标系中生成一条
+     * 从当前位置到终点的简单减速轨迹，避免 Frenet 坐标转换误差。
+     * 
+     * @param current_state 当前状态
+     * @param goal_pose 全局终点位姿
+     * @param dist_to_goal 到终点的距离
+     * @return 最终接近轨迹
+     */
+    Trajectory generateFinalApproachTrajectory(const State& current_state,
+                                                const geometry_msgs::msg::PoseStamped& goal_pose,
+                                                double dist_to_goal);
 
     // ========== ROS2 接口 ==========
     
@@ -162,6 +177,11 @@ private:
     bool has_path_;
     bool has_odom_;
     bool visualize_lattice_;         // 是否可视化 Lattice 候选轨迹
+    
+    // 终点到达检测
+    double goal_tolerance_;          // 到达终点的容差 (m)
+    bool goal_reached_;              // 是否已到达终点
+    geometry_msgs::msg::PoseStamped global_goal_;  // 全局目标点
 };
 
 } // namespace local_planner

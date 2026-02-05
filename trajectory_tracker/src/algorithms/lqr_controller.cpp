@@ -14,10 +14,14 @@ void LQRController::configure(rclcpp::Node* node) {
     params_.wheelbase = node->declare_parameter("vehicle.wheelbase", 0.32);
     params_.max_steering_angle = node->declare_parameter("vehicle.max_steering_angle", 0.5236);
     params_.max_speed = node->declare_parameter("vehicle.max_speed", 1.0);
+    params_.min_speed = node->declare_parameter("vehicle.min_speed", -1.0);  // 允许倒车
     lookahead_distance_ = node->declare_parameter("lqr.lookahead_distance", 2.0);
     q_lateral_ = node->declare_parameter("lqr.q_lateral", 1.0);
     q_heading_ = node->declare_parameter("lqr.q_heading", 1.0);
     r_steering_ = node->declare_parameter("lqr.r_steering", 0.1);
+    
+    RCLCPP_INFO(node->get_logger(), "LQR Controller configured: min_speed=%.2f, max_speed=%.2f", 
+                params_.min_speed, params_.max_speed);
 }
 
 void LQRController::updateGain(double v_ref) {
@@ -111,21 +115,103 @@ bool LQRController::computeControl(const nav_msgs::msg::Path& path,
     ReferencePoint ref;
     if (!getReferencePoint(path, state, ref)) return false;
 
+    // 检查是否已到达路径终点附近
+    if (path.poses.size() >= 1) {
+        double goal_x = path.poses.back().pose.position.x;
+        double goal_y = path.poses.back().pose.position.y;
+        double dist_to_goal = std::hypot(state.x - goal_x, state.y - goal_y);
+        
+        // 如果距离终点小于0.15m，停止
+        if (dist_to_goal < 0.15) {
+            cmd.velocity = 0.0;
+            cmd.steering_angle = 0.0;
+            return true;
+        }
+        
+        // 如果接近终点（小于0.5m），逐渐减速
+        if (dist_to_goal < 0.5) {
+            ref.v = std::min(ref.v, dist_to_goal * 0.5);
+        }
+    }
+
+    // 检测是否需要倒车
+    // 方法：检查轨迹的整体移动方向与机器人朝向的关系
+    // 使用静态变量实现状态保持和滞后，避免模式抖动
+    static bool in_reverse_mode = false;
+    static int reverse_hold_counter = 0;  // 倒车模式保持计数器
+    
+    bool detected_reverse = false;
+    if (path.poses.size() >= 3) {
+        // 计算轨迹的整体移动方向（从第一个点到较远的点）
+        size_t far_idx = std::min(size_t(10), path.poses.size() - 1);
+        double traj_dx = path.poses[far_idx].pose.position.x - path.poses[0].pose.position.x;
+        double traj_dy = path.poses[far_idx].pose.position.y - path.poses[0].pose.position.y;
+        
+        // 计算轨迹方向相对于机器人朝向的投影
+        double forward_projection = traj_dx * std::cos(state.theta) + traj_dy * std::sin(state.theta);
+        double traj_length = std::hypot(traj_dx, traj_dy);
+        
+        // 如果轨迹方向与机器人朝向相反（投影为负且长度足够）
+        if (traj_length > 0.2 && forward_projection < -traj_length * 0.5) {
+            detected_reverse = true;
+        }
+    }
+    
+    // 滞后逻辑：避免模式频繁切换
+    if (detected_reverse && !in_reverse_mode) {
+        // 进入倒车模式
+        in_reverse_mode = true;
+        reverse_hold_counter = 30;  // 至少保持 30 个控制周期
+        RCLCPP_INFO(rclcpp::get_logger("lqr_controller"), "Entering REVERSE mode");
+    } else if (in_reverse_mode) {
+        if (reverse_hold_counter > 0) {
+            reverse_hold_counter--;
+        } else if (!detected_reverse) {
+            // 退出倒车模式的条件更严格：必须明确检测到非倒车
+            in_reverse_mode = false;
+            RCLCPP_INFO(rclcpp::get_logger("lqr_controller"), "Exiting REVERSE mode");
+        }
+    }
+    
+    bool need_reverse = in_reverse_mode;
+
     double e_y = (state.x - ref.x) * (-std::sin(ref.theta)) + (state.y - ref.y) * std::cos(ref.theta);
     double e_theta = state.theta - ref.theta;
     while (e_theta > M_PI) e_theta -= 2.0 * M_PI;
     while (e_theta < -M_PI) e_theta += 2.0 * M_PI;
 
-    double v_ref = std::max(ref.v, 0.1);
-    updateGain(v_ref);
+    // 只有在非停止状态时才强制最小速度
+    double v_ref = (ref.v > 0.01) ? std::max(ref.v, 0.1) : 0.0;
+    
+    // 倒车时使用负速度，但不修改转向逻辑
+    // 对于阿克曼模型，倒车时前轮转角方向不变，只是速度为负
+    if (need_reverse) {
+        v_ref = -std::abs(v_ref) * 0.5;  // 倒车时速度减半
+    }
+    
+    if (std::abs(v_ref) > 0.01) {
+        updateGain(std::abs(v_ref));  // LQR 增益计算使用速度绝对值
+    }
 
     double delta_ref = std::atan(params_.wheelbase * ref.kappa);
     delta_ref = std::clamp(delta_ref, -params_.max_steering_angle, params_.max_steering_angle);
     Eigen::Vector2d e(e_y, e_theta);
-    double delta = delta_ref - K_.dot(e);
+    double delta = (std::abs(v_ref) > 0.01) ? (delta_ref - K_.dot(e)) : 0.0;
+    
+    // 倒车时需要反转转向角！
+    // 原因：LQR 是基于前进时的线性化模型设计的
+    // 自行车模型：theta_dot = v * tan(delta) / L
+    // 前进(v>0) + 正转向角(delta>0) → theta增加 → 向左转
+    // 倒车(v<0) + 正转向角(delta>0) → theta减少 → 向右转
+    // 所以倒车时，为了让 LQR 的控制效果正确，需要反转转向角
+    if (need_reverse) {
+        delta = -delta;
+    }
+    
     delta = std::clamp(delta, -params_.max_steering_angle, params_.max_steering_angle);
 
     cmd.velocity = v_ref;
+    // 允许负速度（倒车），使用配置的 min_speed 参数
     cmd.velocity = std::clamp(cmd.velocity, params_.min_speed, params_.max_speed);
     cmd.steering_angle = delta;
     return true;

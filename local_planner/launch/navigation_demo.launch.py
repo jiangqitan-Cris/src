@@ -56,7 +56,7 @@ def generate_launch_description():
     autostart = LaunchConfiguration('autostart', default='true')
     visualize_lattice = LaunchConfiguration('visualize_lattice', default='true')
     planner_type = LaunchConfiguration('planner_type', default='lattice')
-    use_localization = LaunchConfiguration('use_localization', default='true')
+    use_localization = LaunchConfiguration('use_localization', default='false')
     # controller_type = LaunchConfiguration('controller_type', default='lqr')
     
     declare_use_sim_time = DeclareLaunchArgument(
@@ -80,8 +80,34 @@ def generate_launch_description():
     )
 
     declare_use_localization = DeclareLaunchArgument(
-        'use_localization', default_value='true',
+        'use_localization', default_value='false',
         description='Use AMCL localization to publish dynamic map->odom TF (disable to use static map->odom)'
+    )
+    
+    # 机器人生成位置参数
+    spawn_x = LaunchConfiguration('spawn_x', default='-2.0')
+    spawn_y = LaunchConfiguration('spawn_y', default='1.0')
+    spawn_z = LaunchConfiguration('spawn_z', default='0.1')
+    spawn_yaw = LaunchConfiguration('spawn_yaw', default='0.0')
+    
+    declare_spawn_x = DeclareLaunchArgument(
+        'spawn_x', default_value='-2.0',
+        description='Robot spawn X position'
+    )
+    
+    declare_spawn_y = DeclareLaunchArgument(
+        'spawn_y', default_value='1.0',
+        description='Robot spawn Y position'
+    )
+    
+    declare_spawn_z = DeclareLaunchArgument(
+        'spawn_z', default_value='0.1',
+        description='Robot spawn Z position'
+    )
+    
+    declare_spawn_yaw = DeclareLaunchArgument(
+        'spawn_yaw', default_value='0.0',
+        description='Robot spawn yaw angle (radians)'
     )
 
     # declare_controller_type = DeclareLaunchArgument(
@@ -124,7 +150,10 @@ def generate_launch_description():
         arguments=[
             '-topic', 'robot_description',
             '-name', 'ackermann_robot',
-            '-z', '0.1'
+            '-x', spawn_x,
+            '-y', spawn_y,
+            '-z', spawn_z,
+            '-Y', spawn_yaw,  # Yaw angle
         ]
     )
     
@@ -143,14 +172,12 @@ def generate_launch_description():
         output='screen'
     )
     
+    # Odom / TF 由 Ackermann 里程计与 robot_state_publisher 提供，此处不再从 Gazebo bridge
     node_bridge_odom = Node(
         package='ros_gz_bridge',
         executable='parameter_bridge',
         name='bridge_odom',
-        arguments=[
-            '/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry',
-            '/tf@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V',
-        ],
+        arguments=[],
         output='screen'
     )
     
@@ -268,6 +295,17 @@ def generate_launch_description():
     )
     
     # ============================================================================
+    #                            Ackermann 里程计 (odom + TF)
+    # ============================================================================
+    ackermann_odom_node = Node(
+        package='robot_model_pkg',
+        executable='ackermann_odom_node',
+        name='ackermann_odom_node',
+        output='screen',
+        parameters=[{'wheelbase': 0.32, 'use_sim_time': use_sim_time}],
+    )
+
+    # ============================================================================
     #                            局部规划器
     # ============================================================================
     local_planner_node = Node(
@@ -332,6 +370,10 @@ def generate_launch_description():
         declare_visualize_lattice,
         declare_planner_type,
         declare_use_localization,
+        declare_spawn_x,
+        declare_spawn_y,
+        declare_spawn_z,
+        declare_spawn_yaw,
         # declare_controller_type,
         
         # 机器人和 Gazebo
@@ -382,6 +424,7 @@ def generate_launch_description():
         TimerAction(
             period=5.0,
             actions=[
+                ackermann_odom_node,
                 local_planner_node,
             ]
         ),

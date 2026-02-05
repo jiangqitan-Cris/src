@@ -207,11 +207,36 @@ public:
      * @param current_state 当前状态
      * @param reference_path 参考路径（全局路径）
      * @param obstacles 障碍物列表
+     * @param stop_at_end 是否需要在终点停止（用于接近全局终点时）
+     * @param target_end_s 目标终点的弧长位置（仅当 stop_at_end=true 时使用，-1表示使用参考路径终点）
      * @return 最优轨迹
      */
     Trajectory plan(const State& current_state,
                     const std::vector<State>& reference_path,
-                    const std::vector<Obstacle>& obstacles);
+                    const std::vector<Obstacle>& obstacles,
+                    bool stop_at_end = false,
+                    double target_end_s = -1.0);
+    
+    /**
+     * @brief 检查是否需要倒车调整（航向差异过大）
+     * @param current_state 当前状态
+     * @param reference_path 参考路径
+     * @return 如果航向差异超过阈值（如90°），返回 true
+     */
+    bool needsReverseManeuver(const State& current_state, 
+                               const std::vector<State>& reference_path) const;
+    
+    /**
+     * @brief 生成倒车调整轨迹
+     * 当机器人航向与路径方向差异过大时，生成倒车轨迹进行调整
+     * @param current_state 当前状态
+     * @param reference_path 参考路径
+     * @param obstacles 障碍物
+     * @return 倒车调整轨迹
+     */
+    Trajectory generateReverseTrajectory(const State& current_state,
+                                          const std::vector<State>& reference_path,
+                                          const std::vector<Obstacle>& obstacles);
     
     /**
      * @brief 获取所有候选轨迹（用于可视化）
@@ -226,16 +251,27 @@ private:
      * 
      * 采样不同的终点横向偏移 d_target 和时间 T，
      * 使用五次多项式生成轨迹。
+     * 
+     * @param current_state 当前状态
+     * @param target_speed 目标速度
+     * @param stop_at_end 是否在终点停止（如果是，则只生成收敛到 d=0 的轨迹）
      */
-    std::vector<FrenetPath> generateLateralPaths(const State& current_state, double target_speed);
+    std::vector<FrenetPath> generateLateralPaths(const State& current_state, double target_speed,
+                                                  bool stop_at_end = false);
     
     /**
      * @brief 生成纵向轨迹候选集
      * 
      * 采样不同的终点速度和时间，
      * 使用四次或五次多项式生成轨迹。
+     * 
+     * @param paths 横向轨迹候选集
+     * @param current_state 当前状态
+     * @param stop_at_end 是否在终点停止（使用五次多项式约束终点位置和速度）
+     * @param target_s 目标终点弧长（仅当 stop_at_end=true 时使用）
      */
-    void generateLongitudinalPaths(std::vector<FrenetPath>& paths, const State& current_state);
+    void generateLongitudinalPaths(std::vector<FrenetPath>& paths, const State& current_state,
+                                   bool stop_at_end = false, double target_s = -1.0);
     
     /**
      * @brief 将 Frenet 轨迹转换为笛卡尔坐标

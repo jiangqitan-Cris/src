@@ -13,12 +13,13 @@ local_planner_node:
     # ========================================================================
     planning_frequency: 10.0        # 规划频率 (Hz)
     local_range: 5.0                # 局部障碍物提取范围 (m)
-    lookahead_distance: 10.0        # 参考路径前视距离 (m)
+    lookahead_distance: 5.0         # 参考路径前视距离 (m)
     obstacle_radius: 0.15           # 障碍物等效半径 (m)
     obstacle_threshold: 50          # 障碍物阈值 (0-100)
     obstacle_cluster_dist: 0.3      # 障碍物聚类距离 (m)
     visualize_lattice: true         # 是否可视化 Lattice 候选轨迹
     planner_type: "ilqr"            # 局部规划算法: "lattice" 或 "ilqr"
+    goal_tolerance: 0.1             # 到达终点的容差 (m)
     
     # ========================================================================
     #                         Lattice Planner 配置

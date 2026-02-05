@@ -329,25 +329,26 @@
 
   <gazebo reference="lidar_link">
     <material>Gazebo/Black</material>
-    <!-- 3D LiDAR (32线) -->
+    <!-- 3D LiDAR (16线) - 使用 gpu_lidar -->
     <sensor name="lidar_3d" type="gpu_lidar">
       <always_on>true</always_on>
       <update_rate>10</update_rate>
-      <topic>scan/points</topic>
+      <visualize>true</visualize>
+      <topic>/lidar_3d/scan/points</topic>
       <gz_frame_id>lidar_link</gz_frame_id>
       <lidar>
         <scan>
           <horizontal>
-            <samples>1200</samples>
+            <samples>640</samples>
             <resolution>1</resolution>
             <min_angle>-3.14159</min_angle>
             <max_angle>3.14159</max_angle>
           </horizontal>
           <vertical>
-            <samples>32</samples>
+            <samples>16</samples>
             <resolution>1</resolution>
-            <min_angle>-0.5236</min_angle>
-            <max_angle>0.1745</max_angle>
+            <min_angle>-0.261799</min_angle>
+            <max_angle>0.261799</max_angle>
           </vertical>
         </scan>
         <range>
@@ -362,16 +363,17 @@
         </noise>
       </lidar>
     </sensor>
-    <!-- 2D LiDAR -->
+    <!-- 2D LiDAR (单线，用于 SLAM) -->
     <sensor name="lidar_2d" type="gpu_lidar">
       <always_on>true</always_on>
-      <update_rate>20</update_rate>
-      <topic>scan</topic>
+      <update_rate>10</update_rate>
+      <visualize>false</visualize>
+      <topic>/lidar_2d/scan</topic>
       <gz_frame_id>lidar_link</gz_frame_id>
       <lidar>
         <scan>
           <horizontal>
-            <samples>720</samples>
+            <samples>1200</samples>
             <resolution>1</resolution>
             <min_angle>-3.14159</min_angle>
             <max_angle>3.14159</max_angle>
@@ -385,7 +387,7 @@
         </scan>
         <range>
           <min>0.1</min>
-          <max>15.0</max>
+          <max>30.0</max>
           <resolution>0.01</resolution>
         </range>
         <noise>
@@ -620,12 +622,7 @@
       <right_joint>rear_right_wheel_joint</right_joint>
       <wheel_separation>${track_width}</wheel_separation>
       <wheel_radius>${wheel_radius}</wheel_radius>
-      <odom_publish_frequency>50</odom_publish_frequency>
       <topic>cmd_vel</topic>
-      <odom_topic>odom</odom_topic>
-      <tf_topic>tf</tf_topic>
-      <frame_id>odom</frame_id>
-      <child_frame_id>base_footprint</child_frame_id>
     </plugin>
   </gazebo>
 

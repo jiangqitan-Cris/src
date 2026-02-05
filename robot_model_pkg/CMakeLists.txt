@@ -7,9 +7,11 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-# uncomment the following section in order to fill in
-# further dependencies manually.
-# find_package(<dependency> REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 install(DIRECTORY
   launch
@@ -22,6 +24,34 @@ install(DIRECTORY
 install(DIRECTORY
   urdf
   DESTINATION share/${PROJECT_NAME}/
+)
+
+add_executable(ackermann_odom_node
+  src/ackermann_odom_node.cpp
+)
+
+ament_target_dependencies(ackermann_odom_node
+  rclcpp
+  nav_msgs
+  geometry_msgs
+  std_msgs
+  tf2_ros
+)
+
+add_executable(twist_to_ackermann_node
+  src/twist_to_ackermann_node.cpp
+)
+
+ament_target_dependencies(twist_to_ackermann_node
+  rclcpp
+  geometry_msgs
+  std_msgs
+)
+
+install(TARGETS 
+  ackermann_odom_node
+  twist_to_ackermann_node
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)
