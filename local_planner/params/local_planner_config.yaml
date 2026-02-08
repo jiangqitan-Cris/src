@@ -52,7 +52,7 @@ local_planner_node:
       max_speed: 1.0                # 最大速度 (m/s)
       max_acceleration: 1.0         # 最大加速度 (m/s²)
       max_steering_angle: 0.5       # 最大前轮转角 (rad)
-      max_curvature: 1.0            # 最大曲率 (1/m)
+      max_curvature: 1.7            # 最大曲率 (1/m)
     
     # ========================================================================
     #                            iLQR 配置

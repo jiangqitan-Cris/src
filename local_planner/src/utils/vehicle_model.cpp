@@ -134,7 +134,7 @@ Trajectory AckermannModel::generateManeuverTrajectory(
     // 辅助函数：生成轨迹（不做碰撞检测）
     auto generateTrajectory = [&](int steer_direction) -> Trajectory {
         Trajectory traj;
-        double steering_angle = steer_direction * params_.max_steering_angle * 0.8;
+        double steering_angle = steer_direction * params_.max_steering_angle;
         
         // 计算倒车时间（但限制在合理范围内）
         double angular_rate = std::abs(reverse_speed * std::tan(steering_angle) / wheelbase);

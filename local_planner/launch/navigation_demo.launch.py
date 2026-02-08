@@ -44,7 +44,7 @@ def generate_launch_description():
     # tracker_config = os.path.join(trajectory_tracker_pkg, 'params', 'tracker_config.yaml')
     
     # 地图文件
-    map_file = os.path.join(global_planner_pkg, 'maps', 'nav.yaml')
+    map_file = os.path.join(global_planner_pkg, 'maps', '0927-zl.yaml')
     
     # RViz 配置
     rviz_config = os.path.join(global_planner_pkg, 'rviz', 'navigation.rviz')

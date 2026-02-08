@@ -5,10 +5,6 @@
 
 namespace local_planner {
 
-// 静态变量初始化
-bool LatticePlanner::g_in_reverse_mode = false;
-int LatticePlanner::g_reverse_hold_counter = 0;
-
 // ============================================================================
 //                          构造函数和析构函数
 // ============================================================================
@@ -708,7 +704,8 @@ bool LatticePlanner::checkCollision(const FrenetPath& path,
             
             double dist = std::hypot(path.x[i] - pred_obs.x, path.y[i] - pred_obs.y);
             // 使用更小的安全距离进行碰撞检测，避免过于保守
-            double safe_dist = config_.safe_distance * 0.8 + pred_obs.radius;
+            // double safe_dist = config_.safe_distance * 0.8 + pred_obs.radius;
+            double safe_dist = 0.8 * pred_obs.radius;
             
             if (dist < safe_dist) {
                 if (print_debug) {
